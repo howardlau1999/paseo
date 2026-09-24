@@ -210,6 +210,7 @@ import {
 } from "./session/agent-updates/agent-updates-service.js";
 import { expandTilde } from "../utils/path.js";
 import {
+  resolveAbsoluteQueryRoot,
   searchDirectoryEntries,
   WORKSPACE_SEARCH_HIDDEN_DIRECTORIES,
 } from "../utils/directory-suggestions.js";
@@ -5036,9 +5037,15 @@ export class Session {
     try {
       const workspaceCwd = cwd?.trim();
       const searchesWorkspace = Boolean(workspaceCwd);
+      const homeDir = process.env.HOME ?? homedir();
+      // Without a workspace cwd the picker is HOME-scoped; allow browsing other absolute
+      // paths by re-rooting the query at their deepest existing ancestor.
+      const outsideHome = searchesWorkspace
+        ? null
+        : await resolveAbsoluteQueryRoot({ query, root: homeDir });
       const entries = await searchDirectoryEntries({
-        root: workspaceCwd ? expandTilde(workspaceCwd) : (process.env.HOME ?? homedir()),
-        query,
+        root: outsideHome?.root ?? (workspaceCwd ? expandTilde(workspaceCwd) : homeDir),
+        query: outsideHome?.query ?? query,
         pathFormat: searchesWorkspace ? "relative" : "absolute",
         pathQueryPolicy: searchesWorkspace ? "slashes" : "rooted",
         blankQueryBehavior: searchesWorkspace ? "children" : "none",
