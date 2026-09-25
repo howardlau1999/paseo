@@ -75,6 +75,7 @@ import {
   type ClaudeProviderOptions,
 } from "./options.js";
 import { renderPromptAttachmentAsText } from "../../prompt-attachments.js";
+import { isSpokenInputPrompt } from "../../../voice-config.js";
 import { claudeQuery, type ClaudeOptions, type ClaudeQueryFactory } from "./query.js";
 import {
   realClaudeRewindSdk,
@@ -2112,6 +2113,7 @@ class ClaudeAgentSession implements AgentSession {
   private pendingInterruptAbort = false;
   private foregroundHasVisibleActivity = false;
   private activeTurnHasAssistantText = false;
+  private activeSpokenReply = false;
   private readonly contextUsage: ClaudeContextUsageState;
   private userMessageIds: string[] = [];
   private readonly emittedUserMessageIds = new Set<string>();
@@ -2245,6 +2247,7 @@ class ClaudeAgentSession implements AgentSession {
     }
 
     const sdkMessage = this.toSdkUserMessage(prompt);
+    this.activeSpokenReply = isSpokenPrompt(prompt);
     const sdkUserMessageId =
       typeof sdkMessage.uuid === "string" && sdkMessage.uuid.length > 0 ? sdkMessage.uuid : null;
     this.rememberRewindUserAnchor(sdkUserMessageId);
@@ -2333,6 +2336,7 @@ class ClaudeAgentSession implements AgentSession {
       return { status: "unavailable" };
     }
     this.enqueueSteer(input, message, options.clearPendingPermissions === true);
+    this.activeSpokenReply = isSpokenPrompt(prompt);
     return { status: "accepted" };
   }
 
@@ -3603,6 +3607,7 @@ class ClaudeAgentSession implements AgentSession {
     this.activeForegroundInput = null;
     this.cancelCurrentTurn = null;
     this.activeTurnHasAssistantText = false;
+    this.activeSpokenReply = false;
     this.compactionMarkerOpen = false;
     this.syncTurnState("foreground turn terminal");
   }
@@ -3622,12 +3627,14 @@ class ClaudeAgentSession implements AgentSession {
         this.activeForegroundInput = null;
         this.cancelCurrentTurn = null;
         this.activeTurnHasAssistantText = false;
+        this.activeSpokenReply = false;
         this.syncTurnState("foreground turn terminal");
       } else if (this.autonomousTurn) {
         this.autonomousTurn = null;
         this.activeForegroundQuery = null;
         this.activeForegroundInput = null;
         this.activeTurnHasAssistantText = false;
+        this.activeSpokenReply = false;
         this.syncTurnState("autonomous turn terminal");
       }
     }
@@ -3657,6 +3664,7 @@ class ClaudeAgentSession implements AgentSession {
     this.activeForegroundQuery = null;
     this.activeForegroundInput = null;
     this.activeTurnHasAssistantText = false;
+    this.activeSpokenReply = false;
     this.compactionMarkerOpen = false;
     this.syncTurnState("autonomous turn completed");
   }
@@ -3964,7 +3972,15 @@ class ClaudeAgentSession implements AgentSession {
               }) satisfies AgentStreamEvent,
           );
 
-    return [...messageEvents, ...assistantTimelineEvents];
+    const events = [...messageEvents, ...assistantTimelineEvents];
+    return this.activeSpokenReply
+      ? events.filter(
+          (event) =>
+            event.type !== "timeline" ||
+            event.item.type !== "assistant_message" ||
+            isProviderImageMessage(event.item),
+        )
+      : events;
   }
 
   private async handleMissingResumedConversation(
@@ -4899,8 +4915,9 @@ class ClaudeAgentSession implements AgentSession {
     }
 
     const timeline: PersistedTimelineEntry[] = [];
+    const voiceState = { spokenReply: false };
     for (const line of content.split(/\r?\n/)) {
-      this.ingestPersistedHistoryLine(line, timeline, replay);
+      this.ingestPersistedHistoryLine(line, timeline, replay, voiceState);
     }
 
     if (timeline.length > 0) {
@@ -4978,6 +4995,7 @@ class ClaudeAgentSession implements AgentSession {
     line: string,
     timeline: PersistedTimelineEntry[],
     replay: ClaudeReplayOwnership,
+    voiceState: { spokenReply: boolean },
   ): void {
     const trimmed = line.trim();
     if (!trimmed) {
@@ -5025,6 +5043,7 @@ class ClaudeAgentSession implements AgentSession {
     }
     const taskSnapshot = this.taskState.observe(entry);
     const items = [...(taskSnapshot ? [taskSnapshot] : []), ...this.convertHistoryEntry(entry)];
+    const visibleItems = filterReplayVoiceText(entry, items, voiceState);
     const isVisibleUserEntry =
       entry.type === "user" &&
       typeof entry.uuid === "string" &&
@@ -5038,9 +5057,9 @@ class ClaudeAgentSession implements AgentSession {
       this.rememberRewindAssistantAnchor(entry.uuid);
     }
 
-    if (items.length > 0) {
+    if (visibleItems.length > 0) {
       timeline.push(
-        ...items.map((item) => ({
+        ...visibleItems.map((item) => ({
           item,
           timestamp: historyTimestamp ?? undefined,
         })),
@@ -5972,6 +5991,29 @@ interface ClaudeHistoryEntry {
   uuid?: unknown;
   message?: { content?: unknown; [key: string]: unknown };
   [key: string]: unknown;
+}
+
+function isSpokenPrompt(prompt: AgentPromptInput): boolean {
+  if (typeof prompt === "string") return isSpokenInputPrompt(prompt);
+  return prompt.some((part) => part.type === "text" && isSpokenInputPrompt(part.text));
+}
+
+function filterReplayVoiceText(
+  entry: ClaudeHistoryEntry,
+  items: AgentTimelineItem[],
+  state: { spokenReply: boolean },
+): AgentTimelineItem[] {
+  if (
+    entry.type === "user" &&
+    !isSyntheticHistoryUserEntry(entry) &&
+    !isToolResultUserEntry(entry)
+  ) {
+    const userText = items.find((item) => item.type === "user_message")?.text;
+    state.spokenReply = userText ? isSpokenInputPrompt(userText) : false;
+  }
+  return state.spokenReply && entry.type === "assistant"
+    ? items.filter((item) => item.type !== "assistant_message" || isProviderImageMessage(item))
+    : items;
 }
 
 function mapAssistantHistoryBlocksWithMessageId(
