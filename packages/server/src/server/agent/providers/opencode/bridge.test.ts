@@ -270,6 +270,21 @@ describe("OpenCodeBridge", () => {
       };
       await filter(allowed);
       expect(Object.keys(allowed.tools)).toEqual(["paseo_echo_context", "native"]);
+      bridge.bindSession({
+        sessionId: "parent",
+        env: {},
+        tools: voiceCatalog,
+      });
+      const enabledMidSession: V2TestContext = {
+        sessionID: "child",
+        tools: { paseo_echo_context: {}, paseo_speak: {}, native: {} },
+      };
+      await filter(enabledMidSession);
+      expect(Object.keys(enabledMidSession.tools)).toEqual([
+        "paseo_echo_context",
+        "paseo_speak",
+        "native",
+      ]);
       const voice: V2TestContext = {
         sessionID: "voice",
         tools: { paseo_echo_context: {}, paseo_speak: {}, native: {} },
