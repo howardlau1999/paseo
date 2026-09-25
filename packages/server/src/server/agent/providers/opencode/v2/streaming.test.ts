@@ -4,6 +4,7 @@ import { describe, expect, test } from "vitest";
 import { OpenCodeV2AgentClient } from "./agent.js";
 import { V2Harness } from "../test-utils/v2-harness.js";
 import { createTestLogger } from "../../../../../test-utils/test-logger.js";
+import { wrapSpokenInput } from "../../../../voice-config.js";
 import type { AgentStreamEvent } from "../../../agent-sdk-types.js";
 
 function collectAssistantText(session: {
@@ -158,6 +159,80 @@ describe("OpenCode v2 token streaming", () => {
     ]);
     expect(timeline.messages([completed])).toMatchObject([
       { item: { callId: "voice-call", name: "speak", status: "completed" } },
+    ]);
+  });
+
+  test("keeps OpenCode voice replies identical to the spoken text", () => {
+    const timeline = new V2Timeline();
+    const spoken = {
+      id: "voice-user",
+      type: "user",
+      text: wrapSpokenInput("Write a poem"),
+      time: { created: 1 },
+    } satisfies SessionMessageInfo;
+    const voiceAnswer = assistant([
+      { type: "text", text: "Extra introduction." },
+      {
+        type: "tool",
+        id: "voice-call",
+        name: "paseo_speak",
+        time: { created: 2 },
+        state: {
+          status: "completed",
+          input: { text: "The spoken poem." },
+          content: [{ type: "text", text: "ok" }],
+        },
+      },
+    ]);
+    const extraFinal = {
+      ...assistant([{ type: "text", text: "Extra final summary." }]),
+      id: "voice-final",
+      time: { created: 3 },
+    } satisfies SessionMessageAssistant;
+
+    timeline.expectUserPrompt(spoken.text);
+    timeline.startPart({ assistantMessageID: "streamed", type: "text", ordinal: 0 });
+    expect(
+      timeline.delta({
+        assistantMessageID: "streamed",
+        type: "text",
+        ordinal: 0,
+        delta: "Extra streamed text.",
+      }),
+    ).toBeNull();
+
+    const voiceEvents = timeline.messages([spoken, voiceAnswer, extraFinal]);
+    expect(voiceEvents.map((event) => event.type === "timeline" && event.item.type)).toEqual([
+      "user_message",
+      "tool_call",
+    ]);
+    expect(voiceEvents[1]).toMatchObject({
+      item: { name: "speak", detail: { input: "The spoken poem." } },
+    });
+
+    const typed = {
+      id: "typed-user",
+      type: "user",
+      text: "Normal text prompt",
+      time: { created: 4 },
+    } satisfies SessionMessageInfo;
+    const typedAnswer = {
+      ...assistant([{ type: "text", text: "Normal written reply." }]),
+      id: "typed-answer",
+      time: { created: 5 },
+    } satisfies SessionMessageAssistant;
+    const allMessages = [spoken, voiceAnswer, extraFinal, typed, typedAnswer];
+    expect(timeline.messages(allMessages)).toMatchObject([
+      { item: { type: "user_message", text: "Normal text prompt" } },
+      { item: { type: "assistant_message", text: "Normal written reply." } },
+    ]);
+    expect(
+      new V2Timeline(false)
+        .messages(allMessages)
+        .filter((event) => event.type === "timeline" && event.item.type === "assistant_message")
+        .map((event) => event.item),
+    ).toEqual([
+      { type: "assistant_message", text: "Normal written reply.", messageId: "typed-answer" },
     ]);
   });
 

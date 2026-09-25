@@ -4,8 +4,10 @@ const VOICE_PROMPT_BLOCK_END = "</paseo_voice_mode>";
 const VOICE_AGENT_SYSTEM_INSTRUCTION = [
   "Paseo voice mode is now on.",
   "You are the Paseo voice assistant.",
-  "The user cannot see your chat messages or tool calls.",
+  "The user sees the text passed to speak while hearing its audio.",
   "Always use the speak tool for all user-facing communication.",
+  "Put the entire user-facing reply in the speak text so the displayed and spoken words match exactly.",
+  "After calling speak, end the turn without adding a normal assistant message or summary.",
   "The speech tool may be named speak, paseo_speak, or mcp__paseo__speak; call the available one.",
   "Before calling any non-speak tool, first call speak with a short acknowledgement of what you heard and what you will do next.",
   "For long-running work, use speak to provide progress updates before and during execution.",
@@ -56,6 +58,10 @@ export function buildVoiceModeSystemPrompt(existing: string | undefined, enabled
 
 export function wrapSpokenInput(text: string): string {
   return `<spoken-input>\n${text}\n</spoken-input>\n<instruction>This message was spoken by the user. Respond using the speak tool only, not normal messages, because the user may not be looking at the chat.</instruction>`;
+}
+
+export function isSpokenInputPrompt(text: string): boolean {
+  return text.startsWith("<spoken-input>\n") && text.includes("\n</spoken-input>");
 }
 
 export function buildVoiceAgentMcpServerConfig(params: {

@@ -1,4 +1,5 @@
 import { mapOpencodeToolCall } from "../tool-call-mapper.js";
+import { isSpokenInputPrompt } from "../../../../voice-config.js";
 import type { SessionMessageAssistantTool } from "@opencode/client";
 import { STRUCTURED_OUTPUT_TOOL } from "./structured-output.js";
 import type { SessionMessageInfo } from "@opencode/client";
@@ -12,6 +13,11 @@ function textPartKey(messageID: string, part: "text" | "reasoning", ordinal: num
 export class V2Timeline {
   private readonly content = new Map<string, string>();
   private readonly streams = new Map<string, string>();
+  private spokenReply = false;
+
+  expectUserPrompt(text: string) {
+    this.spokenReply = isSpokenInputPrompt(text);
+  }
 
   resetStreams() {
     this.streams.clear();
@@ -36,6 +42,7 @@ export class V2Timeline {
     if (!text.startsWith(emitted))
       throw new Error("OpenCode changed previously emitted message content");
     this.content.set(key, text);
+    if (event.type === "text" && this.spokenReply) return null;
     const suffix = text.slice(emitted.length);
     const item: AgentTimelineItem =
       event.type === "text"
@@ -46,7 +53,7 @@ export class V2Timeline {
 
   messages(messages: SessionMessageInfo[]): AgentStreamEvent[] {
     const events: AgentStreamEvent[] = [];
-    const state: TimelineState = { structured: false, accepted: false };
+    const state: TimelineState = { structured: false, accepted: false, spoken: false };
     for (const message of messages) {
       const timestamp = new Date(message.time.created).toISOString();
       const push = (item: AgentTimelineItem) =>
@@ -65,7 +72,9 @@ export class V2Timeline {
   ) {
     state.structured = message.metadata?.paseoOutputSchema !== undefined;
     state.accepted = false;
+    state.spoken = isSpokenInputPrompt(message.text);
     if (this.content.has(message.id)) return;
+    this.spokenReply = state.spoken;
     this.content.set(message.id, message.text);
     const clientMessageId = message.metadata?.paseoClientMessageId;
     push({
@@ -110,7 +119,8 @@ export class V2Timeline {
     state: TimelineState,
     push: (item: AgentTimelineItem) => void,
   ) {
-    if (!state.structured || state.accepted || part.state.status !== "completed") return;
+    if (!state.structured || state.accepted || state.spoken || part.state.status !== "completed")
+      return;
     const value = part.state.metadata?.paseoStructuredOutput;
     if (value === undefined) return;
     state.accepted = true;
@@ -131,7 +141,7 @@ export class V2Timeline {
     state: TimelineState,
     push: (item: AgentTimelineItem) => void,
   ) {
-    if (state.structured && part.type === "text") return;
+    if ((state.structured || state.spoken) && part.type === "text") return;
     const key = textPartKey(messageID, part.type, ordinal);
     const previous = this.content.get(key) ?? "";
     // Upstream snapshots may briefly lag the volatile delta stream.
@@ -176,6 +186,7 @@ export class V2Timeline {
 interface TimelineState {
   structured: boolean;
   accepted: boolean;
+  spoken: boolean;
 }
 
 interface TextPartIdentity {

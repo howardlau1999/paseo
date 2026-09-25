@@ -36,6 +36,15 @@ import { features } from "./configuration.js";
 import { commands } from "./commands.js";
 import { messages } from "./history.js";
 import { SessionPermissions } from "./permissions.js";
+
+function promptText(prompt: AgentPromptInput): string {
+  if (typeof prompt === "string") return prompt;
+  return prompt
+    .filter((part) => part.type === "text")
+    .map((part) => part.text)
+    .join("\n");
+}
+
 export class OpenCodeV2Session implements AgentSession {
   readonly provider = "opencode";
   readonly capabilities = V2_CAPABILITIES;
@@ -279,10 +288,16 @@ export class OpenCodeV2Session implements AgentSession {
     });
   }
   startTurn(prompt: AgentPromptInput, options?: AgentRunOptions) {
+    this.timeline.expectUserPrompt(promptText(prompt));
     return this.turns.startTurn(prompt, options);
   }
-  steerActiveTurn(prompt: AgentPromptInput, options: SteerActiveTurnOptions): Promise<SteerResult> {
-    return this.turns.steerActiveTurn(prompt, options);
+  async steerActiveTurn(
+    prompt: AgentPromptInput,
+    options: SteerActiveTurnOptions,
+  ): Promise<SteerResult> {
+    const result = await this.turns.steerActiveTurn(prompt, options);
+    if (result.status === "accepted") this.timeline.expectUserPrompt(promptText(prompt));
+    return result;
   }
   interrupt() {
     return this.turns.interrupt();
