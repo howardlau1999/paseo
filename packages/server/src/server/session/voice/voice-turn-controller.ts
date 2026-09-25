@@ -12,6 +12,7 @@ import type {
 import type { TurnDetectionProvider } from "../../speech/turn-detection-provider.js";
 
 const VOICE_FINAL_TRANSCRIPT_TIMEOUT_MS = 10_000;
+const VOICE_INPUT_STALL_TIMEOUT_MS = 3_000;
 const STT_PRE_ROLL_MS = 1500;
 
 const FILLER_PARTIAL_WORDS = new Set([
@@ -114,6 +115,8 @@ export function createVoiceTurnController(params: {
   let reconnectAttemptedForTurn = false;
   let sttPreRoll: Buffer[] = [];
   let sttPreRollBytes = 0;
+  let lastClientChunkAt = Date.now();
+  let captureStallTimer: ReturnType<typeof setTimeout> | null = null;
   const sealedTranscriptSegmentIds = new Set<string>();
   let currentFinalizingTurn: FinalizingVoiceTurn | null = null;
 
@@ -348,6 +351,41 @@ export function createVoiceTurnController(params: {
     return queued;
   }
 
+  function clearCaptureStallTimer(): void {
+    if (captureStallTimer) {
+      clearTimeout(captureStallTimer);
+      captureStallTimer = null;
+    }
+  }
+
+  function scheduleCaptureStall(): void {
+    clearCaptureStallTimer();
+    if (state.status !== "capturing") {
+      return;
+    }
+
+    const turnId = state.utteranceId;
+    const remainingMs = Math.max(
+      1,
+      VOICE_INPUT_STALL_TIMEOUT_MS - (Date.now() - lastClientChunkAt),
+    );
+    captureStallTimer = setTimeout(() => {
+      captureStallTimer = null;
+      void runSerial(async () => {
+        if (state.status !== "capturing" || state.utteranceId !== turnId) {
+          return;
+        }
+        const idleMs = Date.now() - lastClientChunkAt;
+        if (idleMs < VOICE_INPUT_STALL_TIMEOUT_MS) {
+          scheduleCaptureStall();
+          return;
+        }
+        params.logger.warn({ utteranceId: turnId, idleMs }, "voice_turn.audio_stalled");
+        await handleSpeechStopped();
+      });
+    }, remainingMs);
+  }
+
   function updateDetectorResampler(parsedInputRate: number): void {
     if (parsedInputRate === inputRate) {
       return;
@@ -441,6 +479,7 @@ export function createVoiceTurnController(params: {
       utteranceId: uuidv4(),
       startedAt,
     };
+    scheduleCaptureStall();
     try {
       for (const chunk of sttPreRoll) {
         sttSession?.appendPcm16(chunk);
@@ -462,6 +501,8 @@ export function createVoiceTurnController(params: {
     if (state.status !== "capturing") {
       return;
     }
+
+    clearCaptureStallTimer();
 
     const turnId = state.utteranceId;
     const startedAt = state.startedAt;
@@ -511,14 +552,17 @@ export function createVoiceTurnController(params: {
 
   return {
     async start(): Promise<void> {
+      clearCaptureStallTimer();
       sttSession = createSttSession();
       await sttSession.connect();
       await detector.connect();
       state = { status: "listening" };
+      lastClientChunkAt = Date.now();
       clearSttPreRoll();
     },
 
     async stop(): Promise<void> {
+      clearCaptureStallTimer();
       await runSerial(async () => {
         clearFinalizingTurnTimeout();
         detector.close();
@@ -535,6 +579,9 @@ export function createVoiceTurnController(params: {
     },
 
     async appendClientChunk(input): Promise<void> {
+      if (input.audioBase64.length > 0) {
+        lastClientChunkAt = Date.now();
+      }
       await runSerial(async () => {
         if (state.status === "idle") {
           return;
