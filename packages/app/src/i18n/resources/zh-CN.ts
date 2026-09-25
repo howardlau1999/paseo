@@ -1731,6 +1731,7 @@ export const zhCN: TranslationResources = {
   },
   realtimeVoice: {
     actions: {
+      playbackVolume: "播放音量",
       mute: "静音 realtime voice",
       unmute: "取消静音 realtime voice",
       stop: "停止 realtime voice 并中断 turn",

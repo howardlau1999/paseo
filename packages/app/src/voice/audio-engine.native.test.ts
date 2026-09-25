@@ -73,3 +73,38 @@ it("cancels queued native playback acknowledgements on stop", async () => {
   await vi.advanceTimersByTimeAsync(2_000);
   await engine.destroy();
 });
+
+it("applies playback gain to regular and queued PCM without wrapping clipped samples", async () => {
+  const engine = createAudioEngine(
+    { onCaptureData: vi.fn(), onVolumeLevel: vi.fn() },
+    { nativeModule: native },
+  );
+  const bytes = new Uint8Array(320);
+  const samples = new DataView(bytes.buffer);
+  samples.setInt16(0, 12_000, true);
+  samples.setInt16(2, -20_000, true);
+  const source = {
+    size: bytes.length,
+    type: "audio/pcm;rate=16000;bits=16",
+    async arrayBuffer() {
+      return bytes.buffer;
+    },
+  };
+
+  engine.setPlaybackGain(2);
+  const regular = engine.play(source);
+  await vi.waitFor(() => expect(native.playPCMData).toHaveBeenCalledTimes(1));
+  const boosted = new DataView(native.playPCMData.mock.calls[0]![0].buffer);
+  expect([boosted.getInt16(0, true), boosted.getInt16(2, true)]).toEqual([24_000, -32_768]);
+  await vi.advanceTimersByTimeAsync(10);
+  await regular;
+
+  engine.setPlaybackGain(0.5);
+  const queued = engine.playQueuedPcm!(source);
+  await vi.waitFor(() => expect(native.playPCMData).toHaveBeenCalledTimes(2));
+  const quieter = new DataView(native.playPCMData.mock.calls[1]![0].buffer);
+  expect([quieter.getInt16(0, true), quieter.getInt16(2, true)]).toEqual([6_000, -10_000]);
+  await vi.advanceTimersByTimeAsync(10);
+  await queued;
+  await engine.destroy();
+});

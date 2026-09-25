@@ -169,6 +169,30 @@ describe("loadAppSettingsFromStorage", () => {
     expect(result.language).toBe("system");
   });
 
+  it("keeps the selected voice playback gain across reloads", async () => {
+    const deps = makeDeps();
+    await saveAppSettings({
+      queryClient: new QueryClient(),
+      updates: { voicePlaybackGain: 1.75 },
+      deps,
+    });
+
+    expect((await loadAppSettingsFromStorage(deps)).voicePlaybackGain).toBe(1.75);
+    expect(JSON.parse(deps.storage.entries.get(APP_SETTINGS_KEY) ?? "null").voicePlaybackGain).toBe(
+      1.75,
+    );
+  });
+
+  it("ignores an unsupported voice playback gain from storage", async () => {
+    const deps = makeDeps({
+      storage: createInMemoryKeyValueStorage({
+        [APP_SETTINGS_KEY]: JSON.stringify({ voicePlaybackGain: 4 }),
+      }),
+    });
+
+    expect((await loadAppSettingsFromStorage(deps)).voicePlaybackGain).toBe(1);
+  });
+
   it("defaults workspace title source to title when storage is empty", async () => {
     const deps = makeDeps();
 

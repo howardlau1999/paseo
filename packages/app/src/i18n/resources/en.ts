@@ -1777,6 +1777,7 @@ export const en = {
   },
   realtimeVoice: {
     actions: {
+      playbackVolume: "Playback volume",
       mute: "Mute realtime voice",
       unmute: "Unmute realtime voice",
       stop: "Stop realtime voice and interrupt turn",

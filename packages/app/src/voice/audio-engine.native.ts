@@ -90,6 +90,21 @@ function resamplePcm16(pcm: Uint8Array, fromRate: number, toRate: number): Uint8
   return out;
 }
 
+function applyPlaybackGain(pcm: Uint8Array, gain: number): Uint8Array {
+  if (gain === 1) {
+    return pcm;
+  }
+  const output = new Uint8Array(pcm.length);
+  const inputView = new DataView(pcm.buffer, pcm.byteOffset, pcm.byteLength);
+  const outputView = new DataView(output.buffer);
+  for (let offset = 0; offset + 1 < pcm.length; offset += 2) {
+    const sample = inputView.getInt16(offset, true);
+    const amplified = Math.max(-32768, Math.min(32767, Math.round(sample * gain)));
+    outputView.setInt16(offset, amplified, true);
+  }
+  return output;
+}
+
 export function createAudioEngine(
   callbacks: AudioEngineCallbacks,
   options?: AudioEngineTraceOptions,
@@ -113,6 +128,7 @@ export function createAudioEngine(
     queuedPcmEnqueue: Promise<void>;
     queuedPcmEndMs: number;
     playbackGeneration: number;
+    playbackGain: number;
     destroyed: boolean;
   } = {
     initialized: false,
@@ -126,6 +142,7 @@ export function createAudioEngine(
     queuedPcmEnqueue: Promise.resolve(),
     queuedPcmEndMs: 0,
     playbackGeneration: 0,
+    playbackGain: 1,
     destroyed: false,
   };
 
@@ -268,7 +285,7 @@ export function createAudioEngine(
       const pcm16k = resamplePcm16(pcm, inputRate, 16000);
       const duration = pcm16k.length / 2 / 16000;
       native.resumePlayback();
-      native.playPCMData(pcm16k);
+      native.playPCMData(applyPlaybackGain(pcm16k, refs.playbackGain));
 
       // Native AudioTrack and AVAudioPlayerNode queue these buffers continuously.
       // Keep acknowledgements tied to their estimated completion time.
@@ -308,7 +325,7 @@ export function createAudioEngine(
           const durationSec = pcm16k.length / 2 / 16000;
 
           native.resumePlayback();
-          native.playPCMData(pcm16k);
+          native.playPCMData(applyPlaybackGain(pcm16k, refs.playbackGain));
 
           clearPlaybackTimeout();
           refs.playbackTimeout = setTimeout(() => {
@@ -436,6 +453,10 @@ export function createAudioEngine(
     },
 
     playQueuedPcm,
+
+    setPlaybackGain(gain: number) {
+      refs.playbackGain = gain;
+    },
 
     stop() {
       native.stopPlayback();

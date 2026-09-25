@@ -1804,6 +1804,7 @@ export const fr: TranslationResources = {
   },
   realtimeVoice: {
     actions: {
+      playbackVolume: "Volume de lecture",
       mute: "Couper la voix en temps réel",
       unmute: "Réactiver la voix en temps réel",
       stop: "Arrêtez la voix en temps réel et interrompez le tour",

@@ -96,6 +96,8 @@ export function createAudioEngine(
     source: MediaStreamAudioSourceNode | null;
     processor: ScriptProcessorNode | null;
     gain: GainNode | null;
+    playbackGain: GainNode | null;
+    playbackGainValue: number;
     started: boolean;
     muted: boolean;
     queue: QueuedAudio[];
@@ -113,6 +115,8 @@ export function createAudioEngine(
     source: null,
     processor: null,
     gain: null,
+    playbackGain: null,
+    playbackGainValue: 1,
     started: false,
     muted: false,
     queue: [],
@@ -137,6 +141,10 @@ export function createAudioEngine(
     if (context.state === "suspended") {
       await context.resume().catch(() => undefined);
     }
+    const gain = context.createGain();
+    gain.gain.value = refs.playbackGainValue;
+    gain.connect(context.destination);
+    refs.playbackGain = gain;
     refs.playbackContext = context;
     return context;
   }
@@ -177,7 +185,7 @@ export function createAudioEngine(
     const durationSec = audioBuffer.duration;
     const source = context.createBufferSource();
     source.buffer = audioBuffer;
-    source.connect(context.destination);
+    source.connect(refs.playbackGain!);
 
     return await new Promise<number>((resolve, reject) => {
       refs.activePlayback = { source, resolve, reject, settled: false };
@@ -269,6 +277,7 @@ export function createAudioEngine(
 
       const playbackContext = refs.playbackContext;
       refs.playbackContext = null;
+      refs.playbackGain = null;
       if (playbackContext && playbackContext.state !== "closed") {
         await playbackContext.close().catch(() => undefined);
       }
@@ -377,6 +386,13 @@ export function createAudioEngine(
           void processQueue();
         }
       });
+    },
+
+    setPlaybackGain(gain: number) {
+      refs.playbackGainValue = gain;
+      if (refs.playbackGain) {
+        refs.playbackGain.gain.value = gain;
+      }
     },
 
     stop() {
