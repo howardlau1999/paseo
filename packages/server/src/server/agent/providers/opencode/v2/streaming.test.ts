@@ -1,4 +1,6 @@
 import { V2Timeline } from "./timeline.js";
+import { existsSync, rmSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import type { SessionMessageAssistant } from "@opencode/client";
 import { describe, expect, test } from "vitest";
 import { OpenCodeV2AgentClient } from "./agent.js";
@@ -28,6 +30,9 @@ function assistant(content: SessionMessageAssistant["content"]): SessionMessageA
     content,
   };
 }
+
+const ONE_BY_ONE_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X1r0AAAAASUVORK5CYII=";
 
 describe("OpenCode v2 token streaming", () => {
   test("emits text and reasoning deltas as they arrive", async () => {
@@ -234,6 +239,101 @@ describe("OpenCode v2 token streaming", () => {
     ).toEqual([
       { type: "assistant_message", text: "Normal written reply.", messageId: "typed-answer" },
     ]);
+  });
+
+  test("shows image tool results in a spoken turn without leaking base64 or duplicating snapshots", () => {
+    const timeline = new V2Timeline();
+    const spoken = {
+      id: "voice-user",
+      type: "user",
+      text: wrapSpokenInput("Show me the screenshot"),
+      time: { created: 1 },
+    } satisfies SessionMessageInfo;
+    const result = assistant([
+      { type: "text", text: "Extra text that is not spoken." },
+      {
+        type: "tool",
+        id: "screenshot-call",
+        name: "screenshot",
+        time: { created: 2, completed: 3 },
+        state: {
+          status: "completed",
+          input: {},
+          content: [
+            { type: "text", text: "Screenshot captured" },
+            {
+              type: "file",
+              uri: `data:image/png;base64,${ONE_BY_ONE_PNG_BASE64}`,
+              mime: "image/png",
+              name: "Screenshot",
+            },
+          ],
+        },
+      },
+    ]);
+    const events = timeline.messages([spoken, result]);
+    const image = events.find(
+      (event) => event.type === "timeline" && event.item.type === "assistant_message",
+    );
+    expect(image).toMatchObject({
+      item: { text: expect.stringMatching(/^!\[Screenshot\]\(file:\/\//) },
+    });
+    expect(JSON.stringify(events)).not.toContain(ONE_BY_ONE_PNG_BASE64);
+    expect(JSON.stringify(events)).toContain("[image]");
+    expect(timeline.messages([spoken, result])).toEqual([]);
+    const tool = result.content[1];
+    if (!tool || tool.type !== "tool") throw new Error("Expected screenshot tool");
+    expect(
+      timeline
+        .messages([
+          spoken,
+          assistant([
+            result.content[0],
+            {
+              ...tool,
+              state: { ...tool.state, metadata: { updated: true } },
+            },
+          ]),
+        ])
+        .filter((event) => event.type === "timeline" && event.item.type === "assistant_message"),
+    ).toEqual([]);
+    if (!image || image.type !== "timeline" || image.item.type !== "assistant_message")
+      throw new Error("Image message was not emitted");
+    const source = image.item.text.match(/^!\[[^\]]*\]\((.*)\)$/)?.[1];
+    if (!source) throw new Error("Image source was not emitted");
+    const imagePath = fileURLToPath(source);
+    try {
+      expect(existsSync(imagePath)).toBe(true);
+    } finally {
+      rmSync(imagePath, { force: true });
+    }
+  });
+
+  test("replays OpenCode image files as images and keeps other files as tool output", () => {
+    const result = assistant([
+      {
+        type: "tool",
+        id: "file-call",
+        name: "read",
+        time: { created: 2, completed: 3 },
+        state: {
+          status: "completed",
+          input: {},
+          content: [
+            { type: "file", uri: "file:///tmp/screenshot.png", mime: "image/png" },
+            { type: "file", uri: "file:///tmp/notes.txt", mime: "text/plain" },
+          ],
+        },
+      },
+    ]);
+    const events = new V2Timeline(false).messages([result]);
+    expect(events).toMatchObject([
+      { item: { type: "tool_call", detail: { output: expect.stringContaining("notes.txt") } } },
+      { item: { type: "assistant_message", text: "![Image](file:///tmp/screenshot.png)" } },
+    ]);
+    expect(JSON.stringify(events)).not.toContain(
+      "file:///tmp/screenshot.png\nfile:///tmp/notes.txt",
+    );
   });
 
   test("withholds streamed prose during a structured-output turn", async () => {

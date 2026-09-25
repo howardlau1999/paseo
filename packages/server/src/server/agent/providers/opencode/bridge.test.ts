@@ -25,7 +25,9 @@ afterEach(async () => {
   );
 });
 
-function createCatalog(options: { includeSpeak?: boolean } = {}): PaseoToolCatalog {
+function createCatalog(
+  options: { includeSpeak?: boolean; includeImage?: boolean } = {},
+): PaseoToolCatalog {
   const tool: PaseoToolDefinition = {
     name: "echo_context",
     title: "Echo context",
@@ -45,6 +47,16 @@ function createCatalog(options: { includeSpeak?: boolean } = {}): PaseoToolCatal
       async handler(input: unknown) {
         const parsed = z.object({ text: z.string() }).parse(input);
         return { content: [{ type: "text", text: parsed.text }] };
+      },
+    });
+  }
+  if (options.includeImage) {
+    tools.set("show_image", {
+      name: "show_image",
+      description: "Returns an image.",
+      inputSchema: {},
+      async handler() {
+        return { content: [{ type: "image", data: "YWJj", mimeType: "image/png" }] };
       },
     });
   }
@@ -216,7 +228,7 @@ describe("OpenCodeBridge", () => {
     const paseoHome = await mkdtemp(path.join(tmpdir(), "paseo-opencode-v2-scope-"));
     temporaryDirectories.push(paseoHome);
     const catalog = createCatalog();
-    const voiceCatalog = createCatalog({ includeSpeak: true });
+    const voiceCatalog = createCatalog({ includeSpeak: true, includeImage: true });
     const bridge = new OpenCodeBridge({ paseoHome, logger: createTestLogger() });
     bridge.setManifestCatalog(voiceCatalog);
     await bridge.start();
@@ -306,6 +318,11 @@ describe("OpenCodeBridge", () => {
       await expect(
         tools.get("paseo_speak")!.execute({ text: "hello" }, { sessionID: "voice" }),
       ).resolves.toMatchObject({ content: [{ type: "text", text: "hello" }] });
+      await expect(
+        tools.get("paseo_show_image")!.execute({}, { sessionID: "voice" }),
+      ).resolves.toMatchObject({
+        content: [{ type: "file", uri: "data:image/png;base64,YWJj", mime: "image/png" }],
+      });
       await dispose();
     } finally {
       release();

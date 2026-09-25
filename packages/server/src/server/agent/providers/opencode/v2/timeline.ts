@@ -1,4 +1,8 @@
 import { mapOpencodeToolCall } from "../tool-call-mapper.js";
+import {
+  materializeProviderImage,
+  renderProviderImageOutputAsAssistantMarkdown,
+} from "../../provider-image-output.js";
 import { isSpokenInputPrompt } from "../../../../voice-config.js";
 import type { SessionMessageAssistantTool } from "@opencode/client";
 import { STRUCTURED_OUTPUT_TOOL } from "./structured-output.js";
@@ -13,6 +17,7 @@ function textPartKey(messageID: string, part: "text" | "reasoning", ordinal: num
 export class V2Timeline {
   private readonly content = new Map<string, string>();
   private readonly streams = new Map<string, string>();
+  private readonly renderedToolImages = new Set<string>();
   private spokenReply = false;
 
   expectUserPrompt(text: string) {
@@ -170,6 +175,20 @@ export class V2Timeline {
     this.content.set(key, serialized);
     const item = toolFromV2(part);
     if (item) push(item);
+    const state = part.state;
+    if (!("content" in state)) return;
+    state.content?.forEach((content, index) => {
+      if (content.type !== "file" || !content.mime.toLowerCase().startsWith("image/")) return;
+      const imageKey = `${key}:${index}`;
+      if (this.renderedToolImages.has(imageKey)) return;
+      const image = renderProviderImageOutputAsAssistantMarkdown(
+        { url: content.uri, mimeType: content.mime, altText: content.name },
+        { materialize: materializeProviderImage },
+      );
+      if (!image) return;
+      this.renderedToolImages.add(imageKey);
+      push(image);
+    });
   }
 
   private compactionMessage(
@@ -202,7 +221,13 @@ function toolFromV2(tool: SessionMessageAssistantTool): AgentTimelineItem | null
   const state = tool.state;
   const output =
     "content" in state
-      ? state.content?.map((part) => (part.type === "text" ? part.text : part.uri)).join("\n")
+      ? state.content
+          ?.map((part) => {
+            if (part.type === "text") return part.text;
+            if (part.mime.toLowerCase().startsWith("image/")) return "[image]";
+            return part.uri;
+          })
+          .join("\n")
       : undefined;
   return mapOpencodeToolCall({
     toolName: tool.name,
