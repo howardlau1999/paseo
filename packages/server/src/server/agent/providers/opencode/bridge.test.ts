@@ -8,7 +8,7 @@ import { z } from "zod";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { createTestLogger } from "../../../../test-utils/test-logger.js";
-import type { PaseoToolCatalog } from "../../tools/types.js";
+import type { PaseoToolCatalog, PaseoToolDefinition } from "../../tools/types.js";
 import {
   OpenCodeBridge,
   loadOpenCodeBridgePluginArtifact,
@@ -25,8 +25,8 @@ afterEach(async () => {
   );
 });
 
-function createCatalog(): PaseoToolCatalog {
-  const tool = {
+function createCatalog(options: { includeSpeak?: boolean } = {}): PaseoToolCatalog {
+  const tool: PaseoToolDefinition = {
     name: "echo_context",
     title: "Echo context",
     description: "Returns the supplied value.",
@@ -36,7 +36,18 @@ function createCatalog(): PaseoToolCatalog {
       return { content: [{ type: "text", text: parsed.value }] };
     },
   };
-  const tools = new Map([[tool.name, tool]]);
+  const tools = new Map<string, PaseoToolDefinition>([[tool.name, tool]]);
+  if (options.includeSpeak) {
+    tools.set("speak", {
+      name: "speak",
+      description: "Speak to the user.",
+      inputSchema: { text: z.string() },
+      async handler(input: unknown) {
+        const parsed = z.object({ text: z.string() }).parse(input);
+        return { content: [{ type: "text", text: parsed.text }] };
+      },
+    });
+  }
   return {
     tools,
     getTool(name) {
@@ -205,10 +216,12 @@ describe("OpenCodeBridge", () => {
     const paseoHome = await mkdtemp(path.join(tmpdir(), "paseo-opencode-v2-scope-"));
     temporaryDirectories.push(paseoHome);
     const catalog = createCatalog();
+    const voiceCatalog = createCatalog({ includeSpeak: true });
     const bridge = new OpenCodeBridge({ paseoHome, logger: createTestLogger() });
-    bridge.setManifestCatalog(catalog);
+    bridge.setManifestCatalog(voiceCatalog);
     await bridge.start();
     const release = bridge.bindSession({ sessionId: "parent", env: {}, tools: catalog });
+    const releaseVoice = bridge.bindSession({ sessionId: "voice", env: {}, tools: voiceCatalog });
     const releaseDisabled = bridge.bindSession({ sessionId: "disabled", env: {} });
     try {
       const env = await bridge.decorateV2ServerEnv({});
@@ -250,15 +263,22 @@ describe("OpenCodeBridge", () => {
           },
         },
       });
+      expect(tools.has("paseo_speak")).toBe(true);
       const allowed: V2TestContext = {
         sessionID: "child",
-        tools: { paseo_echo_context: {}, native: {} },
+        tools: { paseo_echo_context: {}, paseo_speak: {}, native: {} },
       };
       await filter(allowed);
       expect(Object.keys(allowed.tools)).toEqual(["paseo_echo_context", "native"]);
+      const voice: V2TestContext = {
+        sessionID: "voice",
+        tools: { paseo_echo_context: {}, paseo_speak: {}, native: {} },
+      };
+      await filter(voice);
+      expect(Object.keys(voice.tools)).toEqual(["paseo_echo_context", "paseo_speak", "native"]);
       const disabled: V2TestContext = {
         sessionID: "disabled",
-        tools: { paseo_echo_context: {}, native: {} },
+        tools: { paseo_echo_context: {}, paseo_speak: {}, native: {} },
       };
       await filter(disabled);
       expect(Object.keys(disabled.tools)).toEqual(["native"]);
@@ -268,9 +288,13 @@ describe("OpenCodeBridge", () => {
       await expect(
         tools.get("paseo_echo_context")!.execute({ value: "blocked" }, { sessionID: "disabled" }),
       ).rejects.toThrow("HTTP 403");
+      await expect(
+        tools.get("paseo_speak")!.execute({ text: "hello" }, { sessionID: "voice" }),
+      ).resolves.toMatchObject({ content: [{ type: "text", text: "hello" }] });
       await dispose();
     } finally {
       release();
+      releaseVoice();
       releaseDisabled();
       await bridge.close();
     }

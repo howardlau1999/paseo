@@ -1431,7 +1431,11 @@ export async function createPaseoDaemon(
   const createAgentToolCatalog = (runtime: PaseoToolRuntimeContext) =>
     createPaseoToolCatalog(createAgentToolHostDependencies(runtime));
   const setAgentProviderToolsEnabled = (enabled: boolean) => {
-    agentProviderRuntime.setPaseoToolCatalog(enabled ? createAgentToolCatalog({}) : null);
+    // OpenCode registers the manifest at plugin startup. Session catalogs
+    // still filter speak until that agent enters voice mode.
+    agentProviderRuntime.setPaseoToolCatalog(
+      enabled ? createAgentToolCatalog({ enableVoiceTools: true }) : null,
+    );
   };
   agentManager.setPaseoToolCatalogFactory(createAgentToolCatalog);
   agentManager.setPaseoToolsEnabled(config.mcpInjectIntoAgents !== false);

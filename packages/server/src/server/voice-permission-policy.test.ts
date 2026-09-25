@@ -17,6 +17,7 @@ describe("isVoicePermissionAllowed", () => {
   test("allows direct speak tool names across provider conventions", () => {
     const result = isVoicePermissionAllowed(buildRequest({ name: "speak" }));
     expect(result).toBe(true);
+    expect(isVoicePermissionAllowed(buildRequest({ name: "paseo_speak" }))).toBe(true);
     expect(isVoicePermissionAllowed(buildRequest({ name: "paseo_voice.speak" }))).toBe(true);
     expect(isVoicePermissionAllowed(buildRequest({ name: "mcp__paseo_voice__speak" }))).toBe(true);
   });

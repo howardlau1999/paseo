@@ -40,6 +40,7 @@ describe("voice mode prompt instructions", () => {
     expect(prompt).toContain("<paseo_voice_mode>");
     expect(prompt).toContain("Paseo voice mode is now on.");
     expect(prompt).toContain("Always use the speak tool for all user-facing communication.");
+    expect(prompt).toContain("paseo_speak");
     expect(prompt).toContain("</paseo_voice_mode>");
   });
 
