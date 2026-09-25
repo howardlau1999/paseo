@@ -363,6 +363,12 @@ export function deriveOpencodeToolDetail(
   error: unknown = null,
   metadata?: Record<string, unknown>,
 ): ToolCallDetail {
+  if (toolName === "speak") {
+    const parsed = z.object({ text: z.string() }).safeParse(input);
+    const text = parsed.success ? parsed.data.text.trim() : "";
+    return { type: "unknown", input: text || null, output: null };
+  }
+
   if (toolName.trim().toLowerCase() === "task") {
     const taskDetail = deriveOpencodeTaskDetail(input, output, error, metadata);
     if (taskDetail) {

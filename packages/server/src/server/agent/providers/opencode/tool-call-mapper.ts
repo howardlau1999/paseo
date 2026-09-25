@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isSpeakToolName } from "@getpaseo/protocol/tool-name-normalization";
 
 import type { ToolCallTimelineItem } from "../../agent-sdk-types.js";
 import { normalizeToolCallStatus } from "../tool-call-mapper-utils.js";
@@ -37,7 +38,8 @@ export function mapOpencodeToolCall(params: OpencodeToolCallParams): ToolCallTim
   if (callId === null) {
     return null;
   }
-  const name = raw.toolName.trim();
+  const rawName = raw.toolName.trim();
+  const name = isSpeakToolName(rawName) ? "speak" : rawName;
   const input = raw.input ?? null;
   const output = raw.output ?? null;
   const error = raw.error ?? null;

@@ -119,6 +119,48 @@ describe("OpenCode v2 token streaming", () => {
     expect(timeline.messages([assistant([{ type: "text", text: "Hello!" }])])).toEqual([]);
   });
 
+  test("shows OpenCode speech text while the speak tool is still running", () => {
+    const timeline = new V2Timeline();
+    const running = assistant([
+      {
+        type: "tool",
+        id: "voice-call",
+        name: "paseo_speak",
+        time: { created: 2 },
+        state: {
+          status: "running",
+          input: { text: "I can speak and show this text." },
+          metadata: {},
+        },
+      },
+    ]);
+    expect(timeline.messages([running])).toMatchObject([
+      {
+        item: {
+          type: "tool_call",
+          callId: "voice-call",
+          name: "speak",
+          status: "running",
+          detail: { type: "unknown", input: "I can speak and show this text." },
+        },
+      },
+    ]);
+    expect(timeline.messages([running])).toEqual([]);
+    const completed = assistant([
+      {
+        ...running.content[0],
+        state: {
+          status: "completed",
+          input: { text: "I can speak and show this text." },
+          content: [{ type: "text", text: "ok" }],
+        },
+      },
+    ]);
+    expect(timeline.messages([completed])).toMatchObject([
+      { item: { callId: "voice-call", name: "speak", status: "completed" } },
+    ]);
+  });
+
   test("withholds streamed prose during a structured-output turn", async () => {
     const harness = new V2Harness();
     let settle!: () => void;

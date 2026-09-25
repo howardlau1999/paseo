@@ -508,23 +508,56 @@ describe("opencode tool-call mapper", () => {
     });
   });
 
-  it("does not apply cross-provider speak normalization in opencode mapper", () => {
+  it("renders OpenCode voice tool text as a speak message", () => {
+    const item = expectMapped(
+      mapOpencodeToolCall({
+        toolName: "paseo_speak",
+        callId: "opencode-call-voice-1",
+        status: "running",
+        input: { text: "Voice response from OpenCode." },
+      }),
+    );
+
+    expect(item.name).toBe("speak");
+    expect(item.status).toBe("running");
+    expect(item.detail).toEqual({
+      type: "unknown",
+      input: "Voice response from OpenCode.",
+      output: null,
+    });
+  });
+
+  it("normalizes namespaced OpenCode speak calls after playback", () => {
     const item = expectMapped(
       mapOpencodeToolCall({
         toolName: "paseo_voice.speak",
-        callId: "opencode-call-voice-1",
+        callId: "opencode-call-voice-2",
         status: "completed",
         input: { text: "Voice response from OpenCode." },
         output: { ok: true },
       }),
     );
 
-    expect(item.name).toBe("paseo_voice.speak");
+    expect(item.name).toBe("speak");
     expect(item.detail).toEqual({
       type: "unknown",
-      input: { text: "Voice response from OpenCode." },
-      output: { ok: true },
+      input: "Voice response from OpenCode.",
+      output: null,
     });
+  });
+
+  it("does not show partial JSON arguments as speech text", () => {
+    const item = expectMapped(
+      mapOpencodeToolCall({
+        toolName: "paseo_speak",
+        callId: "opencode-call-voice-streaming",
+        status: "streaming",
+        input: '{"text":"unfinished',
+      }),
+    );
+
+    expect(item.name).toBe("speak");
+    expect(item.detail).toEqual({ type: "unknown", input: null, output: null });
   });
 
   it("drops tool calls when callId is missing", () => {
