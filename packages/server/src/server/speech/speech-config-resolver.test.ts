@@ -152,7 +152,9 @@ describe("resolveSpeechConfig", () => {
       persisted,
     });
 
-    expect(result.speech.local?.modelsDir).toBe("/tmp/paseo-home/models/local-speech");
+    expect(result.speech.local?.modelsDir).toBe(
+      path.join("/tmp/paseo-home", "models", "local-speech"),
+    );
     expect(result.speech.providers.voiceTurnDetection.provider).toBe("local");
     expect(result.speech.providers.voiceStt.provider).toBe("openai");
     expect(result.speech.providers.voiceTts.provider).toBe("openai");
