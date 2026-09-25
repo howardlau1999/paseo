@@ -1,12 +1,13 @@
 import { describeHookWorkspace } from "./plugins/lifecycle/index.js";
 import express from "express";
-import { createServer as createHTTPServer, type IncomingMessage, type ServerResponse } from "http";
+import { createServer as createHTTPServer } from "http";
 import { constants, existsSync, unlinkSync } from "fs";
 import { open, rm, stat } from "fs/promises";
 import { randomUUID } from "node:crypto";
 import { hostname as getHostname } from "node:os";
 import path from "node:path";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { createMcpHandler } from "@modelcontextprotocol/server";
+import { toNodeHandler } from "@modelcontextprotocol/node";
 import type { Logger } from "pino";
 import { z } from "zod";
 import { createBranchChangeRouteHandler } from "./script-route-branch-handler.js";
@@ -132,7 +133,7 @@ import { createSpeechService } from "./speech/speech-runtime.js";
 import { AgentManager } from "./agent/agent-manager.js";
 import { AgentStorage } from "./agent/agent-storage.js";
 import { attachAgentStoragePersistence } from "./persistence-hooks.js";
-import { createAgentMcpServer } from "./agent/mcp-server.js";
+import { createModernAgentMcpServer } from "./agent/mcp-server.js";
 import {
   createPaseoToolCatalog,
   type PaseoToolHostDependencies,
@@ -1441,37 +1442,6 @@ export async function createPaseoDaemon(
   {
     const agentMcpRoute = "/mcp/agents";
 
-    const createAgentMcpSession = async (callerAgentId?: string) => {
-      const agentMcpServer = await createAgentMcpServer(
-        createAgentToolHostDependencies({
-          callerAgentId,
-          paseoToolPolicy: callerAgentId
-            ? agentManager.getPaseoToolPolicy(callerAgentId)
-            : undefined,
-        }),
-      );
-
-      // Stateless mode: each HTTP request builds a fresh server + transport that is
-      // torn down when the response closes, so no per-session state is retained between
-      // requests. The agent control plane only lists and calls tools, neither of which
-      // needs cross-request state, so sessions would only pin memory for the life of the
-      // daemon (agents that exit without a clean DELETE never get reaped).
-      const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: undefined,
-        // NOTE: We enforce a Vite-like host allowlist at the app/websocket layer.
-        // StreamableHTTPServerTransport's built-in check requires exact Host header matches.
-        enableDnsRebindingProtection: false,
-      });
-      Object.assign(transport, {
-        onerror: (err: Error) => {
-          logger.error({ err }, "Agent MCP transport error");
-        },
-      });
-
-      await agentMcpServer.connect(transport);
-      return { server: agentMcpServer, transport };
-    };
-
     const runAgentMcpRequest = async (
       req: express.Request,
       res: express.Response,
@@ -1528,17 +1498,26 @@ export async function createPaseoDaemon(
         } else if (Array.isArray(callerAgentIdRaw) && typeof callerAgentIdRaw[0] === "string") {
           callerAgentId = callerAgentIdRaw[0];
         }
-        const { server, transport } = await createAgentMcpSession(callerAgentId);
-        res.on("close", () => {
-          void transport.close();
-          void server.close();
-        });
-
-        await transport.handleRequest(
-          req as unknown as IncomingMessage,
-          res as unknown as ServerResponse,
-          req.body,
+        // The v2 handler serves 2026-07-28 requests and its stateless fallback
+        // serves existing 2025-era clients from the same tool catalog.
+        const handler = createMcpHandler(
+          () =>
+            createModernAgentMcpServer(
+              createAgentToolHostDependencies({
+                callerAgentId,
+                paseoToolPolicy: callerAgentId
+                  ? agentManager.getPaseoToolPolicy(callerAgentId)
+                  : undefined,
+              }),
+            ),
+          { onerror: (err) => logger.error({ err }, "Agent MCP transport error") },
         );
+        res.on("close", () => {
+          void handler.close();
+        });
+        await toNodeHandler(handler, {
+          onerror: (err) => logger.error({ err }, "Agent MCP HTTP adapter error"),
+        })(req, res, req.body);
       } catch (err) {
         logger.error({ err }, "Failed to handle Agent MCP request");
         if (!res.headersSent) {

@@ -6,6 +6,10 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { describe, expect, test } from "vitest";
 import { experimental_createMCPClient } from "ai";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import {
+  Client as ModernMcpClient,
+  StreamableHTTPClientTransport as ModernStreamableHTTPClientTransport,
+} from "@modelcontextprotocol/client";
 import pino from "pino";
 
 import { withTimeout } from "../../utils/promise-timeout.js";
@@ -91,6 +95,7 @@ async function createMcpClient(url: string, authToken?: string): Promise<McpClie
 
 interface OfflineMcpDaemon {
   client: McpClient;
+  mcpUrl: string;
   stop: () => Promise<void>;
 }
 
@@ -124,6 +129,7 @@ async function startOfflineMcpDaemon(): Promise<OfflineMcpDaemon> {
     const client = await createMcpClient(`http://127.0.0.1:${port}/mcp/agents`);
     return {
       client,
+      mcpUrl: `http://127.0.0.1:${port}/mcp/agents`,
       stop: async () => {
         await client.close();
         await daemon.stop();
@@ -234,6 +240,25 @@ async function assertAgentNotRunning(options: {
 }
 
 describe("agent MCP end-to-end (offline)", () => {
+  test("serves both 2026-07-28 and legacy MCP clients", async () => {
+    const daemon = await startOfflineMcpDaemon();
+    const modernClient = new ModernMcpClient(
+      { name: "paseo-modern-test", version: "1.0.0" },
+      { versionNegotiation: { mode: { pin: "2026-07-28" } } },
+    );
+    try {
+      await modernClient.connect(new ModernStreamableHTTPClientTransport(new URL(daemon.mcpUrl)));
+      const tools = await modernClient.listTools();
+      expect(tools.tools.map((tool) => tool.name)).toContain("create_workspace");
+
+      const legacyResult = await daemon.client.callTool({ name: "list_agents", args: {} });
+      expect(legacyResult.isError).not.toBe(true);
+    } finally {
+      await modernClient.close();
+      await daemon.stop();
+    }
+  }, 30_000);
+
   test("create_agent runs initial prompt and affects filesystem", async () => {
     const paseoHome = await mkdtemp(path.join(os.tmpdir(), "paseo-home-"));
     const staticDir = await mkdtemp(path.join(os.tmpdir(), "paseo-static-"));
@@ -459,7 +484,9 @@ describe("agent MCP end-to-end (offline)", () => {
       agentId = typeof payload?.agentId === "string" ? payload.agentId : null;
       expect(agentId).toBeTruthy();
 
-      expect(recorder.recordedLaunches.at(-1)?.mcpServers).toMatchObject({
+      expect(
+        recorder.recordedLaunches.find((launch) => launch.title === "Injected MCP")?.mcpServers,
+      ).toMatchObject({
         paseo: {
           type: "http",
           url: `http://127.0.0.1:${port}/mcp/agents?callerAgentId=${agentId!}`,
@@ -484,7 +511,10 @@ describe("agent MCP end-to-end (offline)", () => {
         typeof disabledPayload?.agentId === "string" ? disabledPayload.agentId : null;
       expect(disabledAgentId).toBeTruthy();
 
-      expect(disabledRecorder.recordedLaunches.at(-1)?.mcpServers?.paseo).toBeUndefined();
+      expect(
+        disabledRecorder.recordedLaunches.find((launch) => launch.title === "No injected MCP")
+          ?.mcpServers?.paseo,
+      ).toBeUndefined();
       const disabledAgent = disabledDaemon.agentManager.getAgent(disabledAgentId!);
       expect(disabledAgent?.config.mcpServers?.paseo).toBeUndefined();
     } finally {
@@ -548,7 +578,9 @@ describe("agent MCP end-to-end (offline)", () => {
       agentId = typeof payload?.agentId === "string" ? payload.agentId : null;
       expect(agentId).toBeTruthy();
 
-      expect(recorder.recordedLaunches.at(-1)?.mcpServers).toMatchObject({
+      expect(
+        recorder.recordedLaunches.find((launch) => launch.title === "Wildcard MCP")?.mcpServers,
+      ).toMatchObject({
         paseo: {
           type: "http",
           url: `http://127.0.0.1:${port}/mcp/agents?callerAgentId=${agentId!}`,

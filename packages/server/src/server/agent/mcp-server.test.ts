@@ -1,6 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { Client as ModernMcpClient } from "@modelcontextprotocol/client";
+import { InMemoryTransport as ModernInMemoryTransport } from "@modelcontextprotocol/server";
 import { describe, expect, it, vi } from "vitest";
 import { realpathSync, rmSync } from "node:fs";
 import { access, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
@@ -9,7 +11,7 @@ import { tmpdir } from "node:os";
 import { z } from "zod";
 
 import { createTestLogger } from "../../test-utils/test-logger.js";
-import { createAgentMcpServer } from "./mcp-server.js";
+import { createAgentMcpServer, createModernAgentMcpServer } from "./mcp-server.js";
 import { AgentManager, type ManagedAgent } from "./agent-manager.js";
 import { AgentStorage, type StoredAgentRecord } from "./agent-storage.js";
 import { createTestAgentClients } from "../test-utils/fake-agent-client.js";
@@ -5178,6 +5180,34 @@ describe("provider MCP tools", () => {
 
 describe("speak MCP tool", () => {
   const logger = createTestLogger();
+
+  it("exposes speak through the modern MCP server", async () => {
+    const { agentManager, agentStorage } = createTestDeps();
+    const speak = vi.fn().mockResolvedValue(undefined);
+    const server = await createModernAgentMcpServer({
+      agentManager,
+      agentStorage,
+      providerSnapshotManager: createOpenCodeManager().manager,
+      callerAgentId: "modern-voice-agent",
+      enableVoiceTools: true,
+      resolveSpeakHandler: () => speak,
+      logger,
+    });
+    const client = new ModernMcpClient({ name: "paseo-test-client", version: "1.0.0" });
+    const [clientTransport, serverTransport] = ModernInMemoryTransport.createLinkedPair();
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      expect((await client.listTools()).tools.map((tool) => tool.name)).toContain("speak");
+      await client.callTool({ name: "speak", arguments: { text: "Hello." } });
+      expect(speak).toHaveBeenCalledWith(
+        expect.objectContaining({ text: "Hello.", callerAgentId: "modern-voice-agent" }),
+      );
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
 
   it("invokes registered speak handler for caller agent", async () => {
     const { agentManager, agentStorage } = createTestDeps();

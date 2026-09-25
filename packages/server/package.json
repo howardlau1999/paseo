@@ -113,7 +113,9 @@
     "@getpaseo/protocol": "0.9.2",
     "@getpaseo/relay": "0.9.2",
     "@isaacs/ttlcache": "^2.1.4",
+    "@modelcontextprotocol/node": "^2.1.0",
     "@modelcontextprotocol/sdk": "1.29.0",
+    "@modelcontextprotocol/server": "^2.1.0",
     "@opencode-ai/sdk": "1.14.46",
     "@opencode/client": "2.0.10",
     "@xterm/headless": "^6.0.0",
@@ -149,6 +151,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@modelcontextprotocol/client": "^2.1.0",
     "@playwright/test": "^1.56.1",
     "@types/express": "^4.17.20",
     "@types/markdown-it": "^14.2.0",
