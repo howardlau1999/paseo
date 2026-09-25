@@ -12,10 +12,8 @@ const PCM_MIME_TYPE = "audio/pcm;rate=16000;bits=16";
 const KEEP_AWAKE_TAG = "paseo:voice";
 const THINKING_TONE_REPEAT_GAP_MS = 350;
 /**
- * A reply is spoken as one TTS segment per sentence, and the daemon starts the next segment
- * only once the current one has finished playing, so a reply in progress is punctuated by short
- * silences. The cue is for a wait the user cannot otherwise explain, so it starts only once the
- * silence has outlasted those gaps.
+ * The cue is for a wait the user cannot otherwise explain, so it starts only
+ * once the silence has outlasted ordinary gaps between streamed audio blocks.
  */
 const THINKING_TONE_MIN_SILENCE_MS = 1500;
 const DISPLAY_VOLUME_PUBLISH_INTERVAL_MS = 120;
@@ -104,9 +102,18 @@ interface StreamingPlaybackGroup {
   shouldPlay: boolean;
   chunks: Map<number, StreamingPlaybackChunk>;
   nextChunkToPlay: number;
+  pendingPlayback: number;
   finalChunkIndex: number | null;
   started: boolean;
   ackedChunkIds: Set<string>;
+}
+
+function isPlaybackGroupFinished(group: StreamingPlaybackGroup): boolean {
+  return (
+    group.finalChunkIndex !== null &&
+    group.nextChunkToPlay > group.finalChunkIndex &&
+    group.pendingPlayback === 0
+  );
 }
 
 interface RuntimePlaybackState {
@@ -358,9 +365,7 @@ export function createVoiceRuntime(deps: VoiceRuntimeDeps): VoiceRuntime {
 
         const nextChunk = group.chunks.get(group.nextChunkToPlay);
         if (!nextChunk) {
-          const groupIsFinished =
-            group.finalChunkIndex !== null && group.nextChunkToPlay > group.finalChunkIndex;
-          if (!groupIsFinished) {
+          if (!isPlaybackGroupFinished(group)) {
             return;
           }
           retireFinishedGroup(group, serverId);
@@ -373,6 +378,41 @@ export function createVoiceRuntime(deps: VoiceRuntimeDeps): VoiceRuntime {
         if (group.shouldPlay && !group.started && group.isVoiceMode) {
           group.started = true;
           api.onAssistantAudioStarted(serverId);
+        }
+
+        if (
+          group.shouldPlay &&
+          nextChunk.source.type.startsWith("audio/pcm") &&
+          deps.engine.playQueuedPcm
+        ) {
+          group.pendingPlayback += 1;
+          group.nextChunkToPlay += 1;
+          void deps.engine
+            .playQueuedPcm(nextChunk.source)
+            .then(
+              () => undefined,
+              (error) => {
+                if (generation === playback.generation) {
+                  console.error(
+                    `[VoiceRuntime] queued PCM play error chunk=${nextChunk.chunkIndex}:`,
+                    error,
+                  );
+                }
+              },
+            )
+            .then(() => {
+              if (generation !== playback.generation) return undefined;
+              group.pendingPlayback -= 1;
+              if (!group.ackedChunkIds.has(nextChunk.id)) {
+                group.ackedChunkIds.add(nextChunk.id);
+                void acknowledgeChunk(nextChunk.id).catch((error) => {
+                  console.warn("[VoiceRuntime] Failed to confirm audio playback:", error);
+                });
+              }
+              void processPlaybackQueue(serverId);
+              return undefined;
+            });
+          continue;
         }
 
         try {
@@ -693,6 +733,7 @@ export function createVoiceRuntime(deps: VoiceRuntimeDeps): VoiceRuntime {
           shouldPlay: api.shouldPlayVoiceAudio(serverId),
           chunks: new Map(),
           nextChunkToPlay: 0,
+          pendingPlayback: 0,
           finalChunkIndex: null,
           started: false,
           ackedChunkIds: new Set(),

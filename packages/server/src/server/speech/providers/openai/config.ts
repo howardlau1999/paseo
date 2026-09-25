@@ -12,10 +12,6 @@ export interface OpenAiSpeechProviderConfig {
   tts?: Partial<TTSConfig> & { apiKey?: string };
 }
 
-const OpenAiTtsVoiceSchema = z.enum(["alloy", "echo", "fable", "onyx", "nova", "shimmer"]);
-
-const OpenAiTtsModelSchema = z.enum(["tts-1", "tts-1-hd"]);
-
 const NumberLikeSchema = z.union([z.number(), z.string().trim().min(1)]);
 
 const OptionalFiniteNumberSchema = NumberLikeSchema.pipe(
@@ -45,13 +41,11 @@ const OpenAiSttOptionsSchema = z.object({
 });
 
 const OpenAiTtsOptionsSchema = z.object({
-  ttsVoice: z.string().trim().toLowerCase().pipe(OpenAiTtsVoiceSchema).default("alloy"),
-  ttsModel: z
-    .string()
-    .trim()
-    .toLowerCase()
-    .pipe(OpenAiTtsModelSchema)
-    .default(DEFAULT_OPENAI_TTS_MODEL),
+  ttsVoice: z.string().trim().min(1).default("alloy"),
+  ttsModel: z.string().trim().min(1).default(DEFAULT_OPENAI_TTS_MODEL),
+  ttsLanguage: OptionalTrimmedStringSchema,
+  ttsInstructions: OptionalTrimmedStringSchema,
+  ttsStream: z.boolean().optional(),
 });
 
 function isOpenAiProviderActive(provider: { enabled?: boolean; provider: string }): boolean {
@@ -116,6 +110,9 @@ function buildOpenAiTtsInput(params: {
       pickIfOpenAi(providers.voiceTts, persisted.features?.voiceMode?.tts?.model),
       DEFAULT_OPENAI_TTS_MODEL,
     ]),
+    ttsLanguage: persisted.providers?.openai?.tts?.language,
+    ttsInstructions: persisted.providers?.openai?.tts?.instructions,
+    ttsStream: persisted.providers?.openai?.tts?.stream,
   };
 }
 
@@ -201,6 +198,9 @@ function buildTtsConfig(
     ...(baseUrl ? { baseUrl } : {}),
     voice: options.ttsVoice,
     model: options.ttsModel,
+    ...(options.ttsLanguage ? { language: options.ttsLanguage } : {}),
+    ...(options.ttsInstructions ? { instructions: options.ttsInstructions } : {}),
+    ...(options.ttsStream !== undefined ? { stream: options.ttsStream } : {}),
     responseFormat: "pcm",
   };
 }

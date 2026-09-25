@@ -216,7 +216,29 @@ describe("voice turn controller", () => {
     expect(harness.onSpeechStarted).not.toHaveBeenCalled();
     expect(harness.onSpeechStopped).not.toHaveBeenCalled();
     expect(harness.onFinalTranscript).not.toHaveBeenCalled();
+    expect(harness.sttSessions[0]?.appendedChunks).toEqual([]);
     expect(harness.onError).not.toHaveBeenCalled();
+  });
+
+  it("keeps only recent audio before speech for transcription", async () => {
+    const harness = createControllerHarness();
+    await harness.controller.start();
+
+    for (const sample of [1, 2]) {
+      await harness.controller.appendClientChunk({
+        audioBase64: Buffer.alloc(16_000 * 2, sample).toString("base64"),
+        format: "audio/pcm;rate=16000;bits=16",
+      });
+    }
+    expect(harness.sttSessions[0]?.appendedChunks).toEqual([]);
+
+    harness.detector.emit("speech_started");
+    await settleSerialQueue();
+    const preRoll = Buffer.concat(harness.sttSessions[0]!.appendedChunks);
+    expect(preRoll.length).toBe(16_000 * 3);
+    expect(preRoll[0]).toBe(1);
+    expect(preRoll[16_000]).toBe(2);
+    expect(preRoll.at(-1)).toBe(2);
   });
 
   it("fires onPartialTranscript exactly once for the first non-empty partial in a turn", async () => {

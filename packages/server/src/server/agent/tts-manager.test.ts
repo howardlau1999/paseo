@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import pino from "pino";
-import { Readable } from "node:stream";
+import { PassThrough, Readable } from "node:stream";
 
 import { TTSManager } from "./tts-manager.js";
 import type { TextToSpeechProvider } from "../speech/speech-provider.js";
@@ -52,6 +52,107 @@ describe("TTSManager", () => {
     expect(audioMessage?.payload.isLastChunk).toBe(true);
   });
 
+  it("forwards streaming PCM before EOF and marks real audio as final", async () => {
+    const stream = new PassThrough();
+    const tts: TextToSpeechProvider = {
+      async synthesizeSpeech() {
+        return { stream, format: "pcm", streaming: true };
+      },
+    };
+    const manager = new TTSManager("s1", pino({ level: "silent" }), tts);
+    const emitted: AudioOutputMessage[] = [];
+    const task = manager.generateAndWaitForPlayback(
+      "你好",
+      (message) => {
+        if (message.type === "audio_output") {
+          emitted.push(message);
+          manager.confirmAudioPlayed(message.payload.id);
+        }
+      },
+      new AbortController().signal,
+      true,
+    );
+
+    stream.write(Buffer.alloc(40_000, 1));
+    await vi.waitFor(() => expect(emitted).toHaveLength(1));
+    expect(emitted[0].payload.isLastChunk).toBe(false);
+    expect(Buffer.from(emitted[0].payload.audio, "base64")).toHaveLength(39_990);
+
+    stream.end(Buffer.alloc(4_000, 2));
+    await task;
+    expect(emitted.map((message) => message.payload.chunkIndex)).toEqual([0, 1]);
+    expect(emitted.map((message) => message.payload.isLastChunk)).toEqual([false, true]);
+    expect(
+      Buffer.concat(emitted.map((message) => Buffer.from(message.payload.audio, "base64"))),
+    ).toEqual(Buffer.concat([Buffer.alloc(40_000, 1), Buffer.alloc(4_000, 2)]));
+    expect(Buffer.from(emitted[0].payload.audio, "base64").length % 6).toBe(0);
+  });
+
+  it("forwards a provider block smaller than the old fixed PCM threshold", async () => {
+    const stream = new PassThrough();
+    const tts: TextToSpeechProvider = {
+      async synthesizeSpeech() {
+        return { stream, format: "pcm", streaming: true };
+      },
+    };
+    const manager = new TTSManager("s1", pino({ level: "silent" }), tts);
+    const emitted: AudioOutputMessage[] = [];
+    const task = manager.generateAndWaitForPlayback(
+      "你好",
+      (message) => {
+        if (message.type === "audio_output") {
+          emitted.push(message);
+          manager.confirmAudioPlayed(message.payload.id);
+        }
+      },
+      new AbortController().signal,
+      true,
+    );
+
+    stream.write(Buffer.alloc(12_000, 1));
+    await vi.waitFor(() => expect(emitted).toHaveLength(1));
+    expect(Buffer.from(emitted[0].payload.audio, "base64")).toHaveLength(11_994);
+    stream.end();
+    await task;
+    expect(emitted.at(-1)?.payload.isLastChunk).toBe(true);
+  });
+
+  it("closes a partially emitted streaming group if synthesis fails", async () => {
+    const tts: TextToSpeechProvider = {
+      async synthesizeSpeech() {
+        return {
+          stream: Readable.from(
+            (async function* () {
+              yield Buffer.alloc(40_000, 1);
+              throw new Error("stream failed");
+            })(),
+          ),
+          format: "pcm",
+          streaming: true,
+        };
+      },
+    };
+    const manager = new TTSManager("s1", pino({ level: "silent" }), tts);
+    const emitted: AudioOutputMessage[] = [];
+
+    await expect(
+      manager.generateAndWaitForPlayback(
+        "你好",
+        (message) => {
+          if (message.type === "audio_output") {
+            emitted.push(message);
+            manager.confirmAudioPlayed(message.payload.id);
+          }
+        },
+        new AbortController().signal,
+        true,
+      ),
+    ).rejects.toThrow("stream failed");
+
+    expect(emitted.map((message) => message.payload.isLastChunk)).toEqual([false, true]);
+    expect(emitted[1].payload.audio).toBe("");
+  });
+
   it("splits long text into safe synthesis segments", async () => {
     const calls: string[] = [];
     const tts: TextToSpeechProvider = {
@@ -85,6 +186,57 @@ describe("TTSManager", () => {
     expect(calls.every((text) => text.length <= 260)).toBe(true);
     expect(calls[0].length).toBeLessThanOrEqual(120);
     expect(calls.slice(1).some((text) => text.length > calls[0].length)).toBe(true);
+  });
+
+  it("starts Chinese speech with a short segment and preserves the text", async () => {
+    const calls: string[] = [];
+    const tts: TextToSpeechProvider = {
+      async synthesizeSpeech(text) {
+        calls.push(text);
+        return { stream: Readable.from([Buffer.from("x")]), format: "pcm;rate=24000" };
+      },
+    };
+    const manager = new TTSManager("s1", pino({ level: "silent" }), tts);
+    const text =
+      "中文语音回复需要更快开始播放，所以先合成较短的句子，再准备后续内容。这样即使回复很长，也不用等整段文字生成完成才听到声音。";
+
+    await manager.generateAndWaitForPlayback(
+      text,
+      (message) => {
+        if (message.type === "audio_output") manager.confirmAudioPlayed(message.payload.id);
+      },
+      new AbortController().signal,
+      true,
+    );
+
+    expect(calls.length).toBeGreaterThan(1);
+    expect(calls.every((segment) => segment.length <= 32)).toBe(true);
+    expect(calls.join("")).toBe(text);
+  });
+
+  it("keeps a streaming Chinese voice reply in one synthesis request", async () => {
+    const calls: string[] = [];
+    const tts: TextToSpeechProvider = {
+      prefersWholeUtterance: true,
+      async synthesizeSpeech(text) {
+        calls.push(text);
+        return { stream: Readable.from([Buffer.alloc(4_000)]), format: "pcm", streaming: true };
+      },
+    };
+    const manager = new TTSManager("s1", pino({ level: "silent" }), tts);
+    const reply =
+      "你好呀，我听到你的中文语音了。现在这边已经接上 Qwen 语音合成，你听听这次回复的速度和自然度怎么样。";
+
+    await manager.generateAndWaitForPlayback(
+      reply,
+      (message) => {
+        if (message.type === "audio_output") manager.confirmAudioPlayed(message.payload.id);
+      },
+      new AbortController().signal,
+      true,
+    );
+
+    expect(calls).toEqual([reply]);
   });
 
   it("prefetches the next segment before current playback completes", async () => {

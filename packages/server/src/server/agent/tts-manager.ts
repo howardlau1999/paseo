@@ -20,6 +20,7 @@ interface TtsSegment {
 type PreparedTtsSegment = TtsSegment & {
   format: string;
   stream: Readable;
+  streaming?: boolean;
 };
 
 type PreparedSegmentResult =
@@ -28,10 +29,14 @@ type PreparedSegmentResult =
   | { kind: "error"; error: unknown };
 
 const MAX_TTS_SEGMENT_CHARS = 260;
+const MAX_CJK_TTS_SEGMENT_CHARS = 32;
 const TTS_PREFETCH_SEGMENTS = 2;
 const CLOSED_AUDIO_ID_TTL_MS = 10_000;
+const MIN_STREAMING_PCM_CHUNK_BYTES = 9_600; // 200 ms of mono PCM16 at 24 kHz.
+const MAX_STREAMING_PCM_CHUNK_BYTES = 96_000; // Keep WebSocket messages below 2 s of audio.
+const STREAMING_PCM_ALIGNMENT_BYTES = 6; // Three 24 kHz samples become two 16 kHz samples.
 
-function splitOversizedFragment(fragment: string, maxChars: number): string[] {
+function splitOversizedFragment(fragment: string, maxChars: number, joiner = " "): string[] {
   const trimmed = fragment.trim();
   if (!trimmed) {
     return [];
@@ -41,7 +46,7 @@ function splitOversizedFragment(fragment: string, maxChars: number): string[] {
     return [trimmed];
   }
 
-  const clauseChunks = trimmed.split(/(?<=[,;:])\s+/);
+  const clauseChunks = trimmed.split(/(?<=[,;:，、；：])\s*/u);
   if (clauseChunks.length > 1) {
     const parts: string[] = [];
     let current = "";
@@ -62,7 +67,7 @@ function splitOversizedFragment(fragment: string, maxChars: number): string[] {
 
       if (clauseText.length > maxChars) {
         pushCurrent();
-        parts.push(...splitOversizedFragment(clauseText, maxChars));
+        parts.push(...splitOversizedFragment(clauseText, maxChars, joiner));
         continue;
       }
 
@@ -71,7 +76,7 @@ function splitOversizedFragment(fragment: string, maxChars: number): string[] {
         continue;
       }
 
-      const candidate = `${current} ${clauseText}`;
+      const candidate = `${current}${joiner}${clauseText}`;
       if (candidate.length <= maxChars) {
         current = candidate;
         continue;
@@ -103,18 +108,23 @@ function splitOversizedFragment(fragment: string, maxChars: number): string[] {
   return parts;
 }
 
-function splitTextForTts(text: string): TtsSegment[] {
+function splitTextForTts(text: string, preferWholeUtterance = false): TtsSegment[] {
   const normalized = text.trim().replace(/\s+/g, " ");
   if (!normalized) {
     throw new Error("Cannot synthesize empty text");
   }
 
-  const sentences = normalized.split(/(?<=[.!?])\s+/);
+  const hasHan = /\p{Script=Han}/u.test(normalized);
+  const maxChars =
+    hasHan && !preferWholeUtterance ? MAX_CJK_TTS_SEGMENT_CHARS : MAX_TTS_SEGMENT_CHARS;
+  const sentences = preferWholeUtterance
+    ? [normalized]
+    : normalized.split(hasHan ? /(?<=[。！？])\s*|(?<=[.!?])\s+/u : /(?<=[.!?])\s+/);
   const parts: TtsSegment[] = [];
   let segmentIndex = 0;
 
   for (const sentence of sentences) {
-    const fragments = splitOversizedFragment(sentence, MAX_TTS_SEGMENT_CHARS);
+    const fragments = splitOversizedFragment(sentence, maxChars, hasHan ? "" : " ");
     for (const fragment of fragments) {
       parts.push({ index: segmentIndex, text: fragment });
       segmentIndex += 1;
@@ -163,7 +173,8 @@ export class TTSManager {
       "TTS input text",
     );
 
-    const segments = splitTextForTts(text);
+    const preferWholeUtterance = isVoiceMode && this.resolveTts()?.prefersWholeUtterance === true;
+    const segments = splitTextForTts(text, preferWholeUtterance);
     this.logger.info(
       {
         segmentCount: segments.length,
@@ -263,7 +274,7 @@ export class TTSManager {
     }
 
     const synthStart = Date.now();
-    const { stream, format } = await tts.synthesizeSpeech(segment.text);
+    const { stream, format, streaming } = await tts.synthesizeSpeech(segment.text);
     this.logger.info(
       {
         segmentIndex: segment.index,
@@ -283,6 +294,7 @@ export class TTSManager {
       ...segment,
       stream,
       format,
+      streaming,
     };
   }
 
@@ -342,6 +354,47 @@ export class TTSManager {
     this.recentlyClosedAudioIds.set(audioId, now + CLOSED_AUDIO_ID_TTL_MS);
   }
 
+  private async emitStreamingPcmChunks(
+    stream: Readable,
+    abortSignal: AbortSignal,
+    emitChunk: (audio: Buffer, isLastChunk: boolean) => void,
+  ): Promise<void> {
+    let buffered = Buffer.alloc(0);
+    for await (const chunk of stream) {
+      if (abortSignal.aborted) {
+        break;
+      }
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      buffered = Buffer.concat([buffered, bytes]);
+      // Forward each meaningful provider block as soon as it arrives.
+      // Keep one complete 24 kHz resampling frame for the final marker.
+      // Native playback converts each block to 16 kHz separately, so
+      // aligning regular blocks to three input samples avoids a click at
+      // their boundaries. Older clients also never receive an empty end.
+      const availableBytes =
+        Math.floor(
+          (buffered.length - STREAMING_PCM_ALIGNMENT_BYTES) / STREAMING_PCM_ALIGNMENT_BYTES,
+        ) * STREAMING_PCM_ALIGNMENT_BYTES;
+      if (availableBytes >= MIN_STREAMING_PCM_CHUNK_BYTES) {
+        let offset = 0;
+        while (offset < availableBytes) {
+          const size = Math.min(MAX_STREAMING_PCM_CHUNK_BYTES, availableBytes - offset);
+          emitChunk(buffered.subarray(offset, offset + size), false);
+          offset += size;
+        }
+        buffered = buffered.subarray(availableBytes);
+      }
+    }
+    if (!abortSignal.aborted) {
+      if (buffered.length % 2 !== 0) {
+        throw new Error("Streaming PCM ended with a partial sample");
+      }
+      if (buffered.length > 0) {
+        emitChunk(buffered, true);
+      }
+    }
+  }
+
   private async emitPreparedSegment(params: {
     prepared: PreparedTtsSegment;
     emitMessage: (msg: SessionOutboundMessage) => void;
@@ -383,33 +436,40 @@ export class TTSManager {
 
     abortSignal.addEventListener("abort", onAbort, { once: true });
 
+    let chunkIndex = 0;
+    const emitChunk = (audio: Buffer, isLastChunk: boolean) => {
+      const chunkId = `${audioId}:${chunkIndex}`;
+      pendingPlayback.pendingChunks += 1;
+      emitMessage({
+        type: "audio_output",
+        payload: {
+          id: chunkId,
+          groupId: audioId,
+          chunkIndex,
+          isLastChunk,
+          audio: audio.toString("base64"),
+          format,
+          isVoiceMode,
+        },
+      });
+      chunkIndex += 1;
+    };
+
     try {
-      const buffers: Buffer[] = [];
-      for await (const chunk of stream) {
-        if (abortSignal.aborted) {
-          this.logger.debug("Aborted during stream collection");
-          break;
+      if (prepared.streaming && isVoiceMode && format === "pcm") {
+        await this.emitStreamingPcmChunks(stream, abortSignal, emitChunk);
+      } else {
+        const buffers: Buffer[] = [];
+        for await (const chunk of stream) {
+          if (abortSignal.aborted) {
+            this.logger.debug("Aborted during stream collection");
+            break;
+          }
+          buffers.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
         }
-        buffers.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      }
-
-      if (!abortSignal.aborted && buffers.length > 0) {
-        const fullBuffer = Buffer.concat(buffers);
-        const chunkId = `${audioId}:0`;
-        pendingPlayback.pendingChunks = 1;
-
-        emitMessage({
-          type: "audio_output",
-          payload: {
-            id: chunkId,
-            groupId: audioId,
-            chunkIndex: 0,
-            isLastChunk: true,
-            audio: fullBuffer.toString("base64"),
-            format,
-            isVoiceMode,
-          },
-        });
+        if (!abortSignal.aborted && buffers.length > 0) {
+          emitChunk(Buffer.concat(buffers), true);
+        }
       }
 
       pendingPlayback.streamEnded = true;
@@ -426,7 +486,16 @@ export class TTSManager {
         this.logger.debug("Audio stream closed after abort");
       } else {
         this.logger.error({ err: error }, "Error streaming audio");
+        if (chunkIndex > 0 && prepared.streaming && isVoiceMode && format === "pcm") {
+          try {
+            emitChunk(Buffer.alloc(0), true);
+          } catch {
+            // Preserve the synthesis error if the client connection also failed.
+          }
+        }
         this.pendingPlaybacks.delete(audioId);
+        this.rememberClosedAudioId(audioId);
+        playbackResolve();
         throw error;
       }
     } finally {

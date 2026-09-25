@@ -21,6 +21,8 @@ export interface AudioEngine {
   isMuted(): boolean;
 
   play(audio: AudioPlaybackSource): Promise<number>;
+  /** Queue PCM in the native player now; resolve after its estimated playback ends. */
+  playQueuedPcm?(audio: AudioPlaybackSource): Promise<number>;
   stop(): void;
   clearQueue(): void;
   isPlaying(): boolean;

@@ -12,6 +12,7 @@ import type {
 import type { TurnDetectionProvider } from "../../speech/turn-detection-provider.js";
 
 const VOICE_FINAL_TRANSCRIPT_TIMEOUT_MS = 10_000;
+const STT_PRE_ROLL_MS = 1500;
 
 const FILLER_PARTIAL_WORDS = new Set([
   "uh",
@@ -111,6 +112,8 @@ export function createVoiceTurnController(params: {
   let activeTranscriptSegmentId: string | null = null;
   let partialTranscriptFired = false;
   let reconnectAttemptedForTurn = false;
+  let sttPreRoll: Buffer[] = [];
+  let sttPreRollBytes = 0;
   const sealedTranscriptSegmentIds = new Set<string>();
   let currentFinalizingTurn: FinalizingVoiceTurn | null = null;
 
@@ -398,6 +401,28 @@ export function createVoiceTurnController(params: {
     return sttResampler.processChunk(pcm16);
   }
 
+  function rememberSttPreRoll(session: StreamingTranscriptionSession, pcm16: Buffer): void {
+    sttPreRoll.push(pcm16);
+    sttPreRollBytes += pcm16.length;
+    const maxBytes = Math.round((session.requiredSampleRate * STT_PRE_ROLL_MS) / 1000) * 2;
+    while (sttPreRollBytes > maxBytes && sttPreRoll.length > 0) {
+      const oldest = sttPreRoll[0]!;
+      const excess = sttPreRollBytes - maxBytes;
+      if (oldest.length <= excess) {
+        sttPreRoll.shift();
+        sttPreRollBytes -= oldest.length;
+      } else {
+        sttPreRoll[0] = oldest.subarray(excess);
+        sttPreRollBytes -= excess;
+      }
+    }
+  }
+
+  function clearSttPreRoll(): void {
+    sttPreRoll = [];
+    sttPreRollBytes = 0;
+  }
+
   async function handleSpeechStarted(): Promise<void> {
     if (state.status === "capturing") {
       return;
@@ -416,6 +441,15 @@ export function createVoiceTurnController(params: {
       utteranceId: uuidv4(),
       startedAt,
     };
+    try {
+      for (const chunk of sttPreRoll) {
+        sttSession?.appendPcm16(chunk);
+      }
+    } catch (error) {
+      handleSttError(error);
+    } finally {
+      clearSttPreRoll();
+    }
     params.logger.info(
       {
         utteranceId: state.utteranceId,
@@ -434,6 +468,7 @@ export function createVoiceTurnController(params: {
     const endedAt = Date.now();
 
     state = { status: "listening" };
+    clearSttPreRoll();
 
     const finalizingTurn: FinalizingVoiceTurn = {
       turnId,
@@ -480,6 +515,7 @@ export function createVoiceTurnController(params: {
       await sttSession.connect();
       await detector.connect();
       state = { status: "listening" };
+      clearSttPreRoll();
     },
 
     async stop(): Promise<void> {
@@ -494,6 +530,7 @@ export function createVoiceTurnController(params: {
         sttSession = null;
         currentFinalizingTurn = null;
         state = { status: "idle" };
+        clearSttPreRoll();
       });
     },
 
@@ -530,9 +567,13 @@ export function createVoiceTurnController(params: {
           detector.appendPcm16(detectorPcm16);
         }
 
-        if (sttPcm16 && sttPcm16.length > 0) {
+        if (currentSttSession && sttPcm16 && sttPcm16.length > 0) {
           try {
-            currentSttSession?.appendPcm16(sttPcm16);
+            if (state.status === "capturing") {
+              currentSttSession.appendPcm16(sttPcm16);
+            } else if (state.status === "listening") {
+              rememberSttPreRoll(currentSttSession, sttPcm16);
+            }
           } catch (error) {
             handleSttError(error);
           }

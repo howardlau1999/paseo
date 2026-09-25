@@ -134,6 +134,30 @@ describe("resolveSpeechConfig", () => {
     expect(result.openai?.stt?.model).toBe("gpt-4o-transcribe");
   });
 
+  test("keeps the local VAD worker when STT and TTS use OpenAI-compatible services", () => {
+    const persisted = PersistedConfigSchema.parse({
+      features: {
+        dictation: { stt: { provider: "openai" } },
+        voiceMode: {
+          turnDetection: { provider: "local" },
+          stt: { provider: "openai" },
+          tts: { provider: "openai", model: "qwen3-tts", voice: "vivian" },
+        },
+      },
+    });
+
+    const result = resolveSpeechConfig({
+      paseoHome: "/tmp/paseo-home",
+      env: {} as NodeJS.ProcessEnv,
+      persisted,
+    });
+
+    expect(result.speech.local?.modelsDir).toBe("/tmp/paseo-home/models/local-speech");
+    expect(result.speech.providers.voiceTurnDetection.provider).toBe("local");
+    expect(result.speech.providers.voiceStt.provider).toBe("openai");
+    expect(result.speech.providers.voiceTts.provider).toBe("openai");
+  });
+
   test("resolves STT language from env, settings, and voice-to-dictation fallback", () => {
     const persisted = PersistedConfigSchema.parse({
       features: {
@@ -163,6 +187,23 @@ describe("resolveSpeechConfig", () => {
       dictation: "es",
       voice: "es",
     });
+  });
+
+  test("selects the Chinese Kokoro voice when configured", () => {
+    const persisted = PersistedConfigSchema.parse({
+      features: {
+        voiceMode: {
+          tts: { provider: "local", model: "kokoro-multi-lang-v1_0" },
+        },
+      },
+    });
+    const result = resolveSpeechConfig({
+      paseoHome: "/tmp/paseo-home",
+      env: {} as NodeJS.ProcessEnv,
+      persisted,
+    });
+    expect(result.speech.local?.models.voiceTts).toBe("kokoro-multi-lang-v1_0");
+    expect(result.speech.local?.models.voiceTtsSpeakerId).toBe(48);
   });
 
   test("respects disabled dictation and voice mode feature flags", () => {

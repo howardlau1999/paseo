@@ -8,12 +8,16 @@ export type { SpeechStreamResult };
 export interface TTSConfig {
   apiKey: string;
   baseUrl?: string;
-  model?: "tts-1" | "tts-1-hd";
-  voice?: "alloy" | "echo" | "fable" | "onyx" | "nova" | "shimmer";
+  model?: string;
+  voice?: string;
+  language?: string;
+  instructions?: string;
+  stream?: boolean;
   responseFormat?: "mp3" | "opus" | "aac" | "flac" | "wav" | "pcm";
 }
 
 export class OpenAITTS implements TextToSpeechProvider {
+  public readonly prefersWholeUtterance: boolean;
   private readonly openaiClient: OpenAI;
   private readonly config: TTSConfig;
   private readonly logger: pino.Logger;
@@ -25,6 +29,8 @@ export class OpenAITTS implements TextToSpeechProvider {
       responseFormat: "pcm",
       ...ttsConfig,
     };
+    this.prefersWholeUtterance =
+      this.config.stream === true && this.config.responseFormat === "pcm";
     this.logger = parentLogger.child({ module: "agent", provider: "openai", component: "tts" });
     this.openaiClient = new OpenAI({
       apiKey: ttsConfig.apiKey,
@@ -54,20 +60,23 @@ export class OpenAITTS implements TextToSpeechProvider {
         "Synthesizing speech",
       );
 
-      const response = await this.openaiClient.audio.speech.create({
+      const requestBody = {
         model: this.config.model!,
         voice: this.config.voice!,
         input: text,
-        response_format: this.config.responseFormat as
-          | "mp3"
-          | "opus"
-          | "aac"
-          | "flac"
-          | "wav"
-          | "pcm",
-      });
+        response_format: this.config.responseFormat!,
+        ...(this.config.language ? { language: this.config.language } : {}),
+        ...(this.config.instructions ? { instructions: this.config.instructions } : {}),
+        ...(this.config.stream ? { stream: true, stream_format: "audio" as const } : {}),
+      };
+      const response = await this.openaiClient.audio.speech.create(requestBody);
 
-      const audioStream = response.body as unknown as Readable;
+      if (!response.body) {
+        throw new Error("TTS response has no audio body");
+      }
+      const audioStream = Readable.fromWeb(
+        response.body as unknown as import("node:stream/web").ReadableStream,
+      );
 
       const duration = Date.now() - startTime;
       this.logger.debug({ duration }, "Speech synthesis stream ready");
@@ -75,6 +84,7 @@ export class OpenAITTS implements TextToSpeechProvider {
       return {
         stream: audioStream,
         format: this.config.responseFormat || "mp3",
+        streaming: this.config.stream && this.config.responseFormat === "pcm",
       };
     } catch (error) {
       this.logger.error({ err: error }, "Speech synthesis error");

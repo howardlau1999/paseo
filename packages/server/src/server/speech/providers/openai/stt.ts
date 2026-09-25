@@ -124,11 +124,15 @@ export class OpenAISTT implements SpeechToTextProvider {
 
         const committedId = segmentId;
         const prev = previousSegmentId;
+        const committedPcm16 = pcm16;
+        pcm16 = Buffer.alloc(0);
+        previousSegmentId = committedId;
+        segmentId = v4();
         emitter.emit("committed", { segmentId: committedId, previousSegmentId: prev });
 
         void (async () => {
           try {
-            if (pcm16.length === 0) {
+            if (committedPcm16.length === 0) {
               emitter.emit("transcript", {
                 segmentId: committedId,
                 transcript: "",
@@ -139,7 +143,7 @@ export class OpenAISTT implements SpeechToTextProvider {
               return;
             }
 
-            const wav = convertPCMToWavBuffer(pcm16);
+            const wav = convertPCMToWavBuffer(committedPcm16);
             const result = await transcribeAudio(
               wav,
               "audio/wav",
@@ -159,10 +163,6 @@ export class OpenAISTT implements SpeechToTextProvider {
             });
           } catch (err) {
             emitter.emit("error", err);
-          } finally {
-            previousSegmentId = committedId;
-            segmentId = v4();
-            pcm16 = Buffer.alloc(0);
           }
         })();
       },
@@ -205,7 +205,7 @@ export class OpenAISTT implements SpeechToTextProvider {
 
       const response = await this.openaiClient.audio.transcriptions.create({
         file: await import("fs").then((fs) => fs.createReadStream(tempFilePath!)),
-        language,
+        ...(language && language !== "auto" ? { language } : {}),
         model: modelToUse,
         ...(prompt ? { prompt } : {}),
         ...(supportsLogprobs ? { include: includeLogprobs } : {}),

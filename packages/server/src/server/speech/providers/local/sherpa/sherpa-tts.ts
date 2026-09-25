@@ -1,16 +1,18 @@
 import type pino from "pino";
 import { Readable } from "node:stream";
 import { existsSync } from "node:fs";
+import { availableParallelism } from "node:os";
 
 import type { SpeechStreamResult, TextToSpeechProvider } from "../../../speech-provider.js";
 import { chunkBuffer, float32ToPcm16le } from "../../../audio.js";
 import { loadSherpaOnnxNode } from "./sherpa-onnx-node-loader.js";
 
-export type SherpaTtsPreset = "kokoro-en-v0_19";
+export type SherpaTtsPreset = "kokoro-en-v0_19" | "kokoro-multi-lang-v1_0";
 
 export interface SherpaTtsConfig {
   preset: SherpaTtsPreset;
   modelDir: string;
+  provider?: "cpu" | "cuda";
   speakerId?: number;
   speed?: number;
   lengthScale?: number;
@@ -51,7 +53,8 @@ export class SherpaOnnxTTS implements TextToSpeechProvider {
     > = loadSherpaOnnxNode,
   ) {
     this.logger = logger.child({ module: "speech", provider: "local", component: "tts" });
-    this.speakerId = config.speakerId ?? 0;
+    const multilingual = config.preset === "kokoro-multi-lang-v1_0";
+    this.speakerId = config.speakerId ?? (multilingual ? 48 : 0);
     this.speed = config.speed ?? 1.0;
 
     const sherpa = loadNative();
@@ -69,29 +72,55 @@ export class SherpaOnnxTTS implements TextToSpeechProvider {
     assertFileExists(tokensPath, "TTS tokens");
     assertFileExists(dataDir, "TTS espeak-ng dataDir");
 
+    const usLexicon = `${config.modelDir}/lexicon-us-en.txt`;
+    const zhLexicon = `${config.modelDir}/lexicon-zh.txt`;
+    const ruleFsts = ["phone-zh.fst", "date-zh.fst", "number-zh.fst"].map(
+      (file) => `${config.modelDir}/${file}`,
+    );
+    if (multilingual) {
+      assertFileExists(usLexicon, "TTS English lexicon");
+      assertFileExists(zhLexicon, "TTS Chinese lexicon");
+      for (const ruleFst of ruleFsts) {
+        assertFileExists(ruleFst, "TTS Chinese rule FST");
+      }
+    }
+
+    const provider = config.provider ?? "cpu";
     const modelConfig = {
       // The native parser reads these under model, despite the upstream JS typedef.
-      numThreads: config.numThreads ?? 2,
-      provider: "cpu",
+      numThreads: config.numThreads ?? (multilingual ? Math.min(4, availableParallelism()) : 2),
+      provider,
       kokoro: {
         model: modelPath,
         voices: voicesPath,
         tokens: tokensPath,
         dataDir,
         lengthScale: config.lengthScale ?? 1.0,
+        ...(multilingual ? { lexicon: `${usLexicon},${zhLexicon}` } : {}),
       },
     };
 
     const offlineTtsConfig = {
       model: modelConfig,
       maxNumSentences: 1,
+      ...(multilingual ? { ruleFsts: ruleFsts.join(",") } : {}),
     };
 
-    this.tts = new (
+    const OfflineTts = (
       sherpa as unknown as { OfflineTts: new (config: unknown) => SherpaOfflineTtsNative }
-    ).OfflineTts(offlineTtsConfig);
+    ).OfflineTts;
+    try {
+      this.tts = new OfflineTts(offlineTtsConfig);
+    } catch (error) {
+      if (provider !== "cuda") {
+        throw error;
+      }
+      this.logger.warn({ err: error }, "CUDA TTS initialization failed; using CPU");
+      modelConfig.provider = "cpu";
+      this.tts = new OfflineTts(offlineTtsConfig);
+    }
     this.logger.info(
-      { preset: config.preset, modelDir: config.modelDir },
+      { preset: config.preset, modelDir: config.modelDir, provider: modelConfig.provider },
       "Sherpa offline TTS initialized",
     );
   }

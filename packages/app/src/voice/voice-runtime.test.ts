@@ -245,6 +245,89 @@ describe("voice runtime", () => {
     });
   });
 
+  it("queues native PCM chunks ahead while confirming each after playback", async () => {
+    const adapter = createSessionAdapter();
+    const playResolvers: Array<(duration: number) => void> = [];
+    const engine = createAudioEngineMock();
+    engine.playQueuedPcm = vi.fn(
+      () =>
+        new Promise<number>((resolve) => {
+          playResolvers.push(resolve);
+        }),
+    );
+    const { runtime } = createRuntime({ engine });
+    runtime.registerSession(adapter);
+
+    await runtime.startVoice("server-1", "agent-1");
+    runtime.onTurnEvent("server-1", "agent-1", "turn_started");
+    runtime.handleAudioOutput(
+      "server-1",
+      createAudioPayload({
+        id: "chunk-0",
+        groupId: "group-1",
+        chunkIndex: 0,
+        isLastChunk: false,
+      }),
+    );
+    runtime.handleAudioOutput(
+      "server-1",
+      createAudioPayload({
+        id: "chunk-1",
+        groupId: "group-1",
+        chunkIndex: 1,
+        isLastChunk: true,
+      }),
+    );
+
+    expect(engine.playQueuedPcm).toHaveBeenCalledTimes(2);
+    expect(adapter.audioPlayed).not.toHaveBeenCalled();
+    expect(runtime.getSnapshot().phase).toBe("playing");
+
+    playResolvers[0](0.1);
+    await vi.waitFor(() => {
+      expect(adapter.audioPlayed).toHaveBeenCalledWith("chunk-0");
+    });
+    expect(adapter.audioPlayed).not.toHaveBeenCalledWith("chunk-1");
+    expect(runtime.getSnapshot().phase).toBe("playing");
+
+    playResolvers[1](0.1);
+    await vi.waitFor(() => {
+      expect(adapter.audioPlayed).toHaveBeenCalledWith("chunk-1");
+      expect(runtime.getSnapshot().phase).toBe("waiting");
+    });
+  });
+
+  it("does not confirm queued native PCM after voice mode stops", async () => {
+    const adapter = createSessionAdapter();
+    let resolvePlay!: (duration: number) => void;
+    const engine = createAudioEngineMock();
+    engine.playQueuedPcm = vi.fn(
+      () =>
+        new Promise<number>((resolve) => {
+          resolvePlay = resolve;
+        }),
+    );
+    const { runtime } = createRuntime({ engine });
+    runtime.registerSession(adapter);
+
+    await runtime.startVoice("server-1", "agent-1");
+    runtime.handleAudioOutput(
+      "server-1",
+      createAudioPayload({
+        id: "chunk-0",
+        groupId: "group-1",
+        chunkIndex: 0,
+        isLastChunk: true,
+      }),
+    );
+    await runtime.stopVoice();
+    resolvePlay(0.1);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(adapter.audioPlayed).not.toHaveBeenCalled();
+  });
+
   it("leaves playback phase unchanged after assistant playback while the turn is still active", async () => {
     const adapter = createSessionAdapter();
     const { runtime, engine } = createRuntime();

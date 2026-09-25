@@ -1,6 +1,8 @@
 import { fork } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import type pino from "pino";
@@ -91,9 +93,28 @@ function resolveWorkerExecArgv(): string[] {
   ];
 }
 
-function forkLocalSpeechWorker(): LocalSpeechWorkerProcess {
+function forkLocalSpeechWorker(modelsDir: string): LocalSpeechWorkerProcess {
   const env = { ...process.env };
   applySherpaLoaderEnv(env);
+  const gpuRuntimeDir = path.join(modelsDir, "sherpa-onnx-gpu");
+  const gpuLibDir = path.join(gpuRuntimeDir, "lib");
+  if (
+    process.platform === "linux" &&
+    process.arch === "x64" &&
+    existsSync(path.join(gpuLibDir, "libonnxruntime_providers_cuda.so")) &&
+    existsSync(path.join(gpuLibDir, "libsherpa-onnx-c-api.so"))
+  ) {
+    const cudaLibDirs = [
+      gpuLibDir,
+      ...["cublas", "nvjitlink", "cudnn", "cuda_nvrtc", "cufft", "curand", "cuda_runtime"].map(
+        (name) => path.join(gpuRuntimeDir, "nvidia", name, "lib"),
+      ),
+    ];
+    env.LD_LIBRARY_PATH = [...cudaLibDirs, env.LD_LIBRARY_PATH].filter(Boolean).join(":");
+    env.PASEO_SHERPA_GPU_ENABLED = "1";
+  } else {
+    delete env.PASEO_SHERPA_GPU_ENABLED;
+  }
   return fork(fileURLToPath(resolveWorkerUrl()), [], {
     env,
     execArgv: resolveWorkerExecArgv(),
@@ -196,7 +217,7 @@ export class LocalSpeechWorkerClient {
     this.logger = options.logger.child({ component: "local-speech-worker-client" });
     this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     this.idleTtlMs = options.idleTtlMs ?? DEFAULT_IDLE_TTL_MS;
-    this.forkWorker = options.forkWorker ?? forkLocalSpeechWorker;
+    this.forkWorker = options.forkWorker ?? (() => forkLocalSpeechWorker(options.config.modelsDir));
   }
 
   async synthesizeSpeech(text: string): Promise<SpeechStreamResult> {

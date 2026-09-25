@@ -55,12 +55,18 @@ const OpenAiSpeechEndpointSchema = z
   })
   .strict();
 
+const OpenAiTtsEndpointSchema = OpenAiSpeechEndpointSchema.extend({
+  language: z.string().trim().min(1).optional(),
+  instructions: z.string().trim().min(1).optional(),
+  stream: z.boolean().optional(),
+});
+
 const OpenAiProviderSchema = z
   .object({
     apiKey: z.string().min(1).optional(),
     baseUrl: z.string().trim().min(1).optional(),
     stt: OpenAiSpeechEndpointSchema.optional(),
-    tts: OpenAiSpeechEndpointSchema.optional(),
+    tts: OpenAiTtsEndpointSchema.optional(),
   })
   .strict();
 
@@ -143,7 +149,7 @@ const FeatureVoiceModeSchema = z
       .object({
         provider: SpeechProviderIdSchema.optional(),
         model: z.string().min(1).optional(),
-        voice: z.enum(["alloy", "echo", "fable", "onyx", "nova", "shimmer"]).optional(),
+        voice: z.string().trim().min(1).optional(),
         speakerId: z.number().int().optional(),
         speed: z.number().optional(),
       })
