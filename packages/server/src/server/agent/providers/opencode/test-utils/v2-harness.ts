@@ -29,11 +29,16 @@ export class V2Harness {
   readonly environments: Array<{ sessionID: string; variables: Record<string, string> }> = [];
   readonly mcpAdds: string[] = [];
   models: ModelInfo[] = [];
+  /** Sessions OpenCode currently reports as running, keyed by session ID. */
+  activeSessions: Record<string, unknown> = {};
   releases = 0;
+  waitCalls = 0;
   prompt: V2Api["session"]["prompt"] = async (input) => {
     this.prompts.push(input.text);
   };
-  wait: V2Api["session"]["wait"] = async () => undefined;
+  wait: V2Api["session"]["wait"] = async () => {
+    this.waitCalls += 1;
+  };
   interrupt: V2Api["session"]["interrupt"] = async () => {
     this.info.outcome = "interrupted";
     return { interrupted: true };
@@ -95,7 +100,7 @@ export class V2Harness {
       },
       get: async () => this.info,
       list: async () => ({ data: [], cursor: {} }),
-      active: async () => ({}),
+      active: async () => this.activeSessions,
       remove: async () => undefined,
       switchAgent: unexpected,
       switchModel: unexpected,

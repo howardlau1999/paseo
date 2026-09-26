@@ -275,6 +275,85 @@ describe("OpenCode v2 session lifecycle", () => {
     expect(harness.releases).toBe(1);
   });
 
+  test("retries a long-poll wait that fails while the turn is still running", async () => {
+    const harness = new V2Harness();
+    const transportError = Object.assign(new Error("Transport"), {
+      cause: Object.assign(new Error("fetch failed"), {
+        cause: Object.assign(new Error("Headers Timeout Error"), {
+          code: "UND_ERR_HEADERS_TIMEOUT",
+        }),
+      }),
+    });
+    harness.activeSessions = {};
+    harness.wait = async () => {
+      harness.waitCalls += 1;
+      if (harness.waitCalls === 1) {
+        // The wait request dies mid-turn, as undici's 300s headersTimeout does.
+        harness.activeSessions = { session: { id: "session" } };
+        throw transportError;
+      }
+    };
+    harness.prompt = async () => {
+      harness.history.push({
+        id: "answer",
+        type: "assistant",
+        agent: "build",
+        model: { providerID: "test", id: "model" },
+        time: { created: 2 },
+        content: [{ type: "text", text: "done" }],
+      });
+    };
+    const client = new OpenCodeV2AgentClient({
+      logger: createTestLogger(),
+      runtime: harness.runtime,
+    });
+    const session = await client.createSession({ provider: "opencode", cwd: "/tmp/project" });
+    const events: AgentStreamEvent[] = [];
+    session.subscribe((event) => events.push(event));
+    try {
+      const result = await session.run("hello");
+      expect(result.finalText).toBe("done");
+      expect(harness.waitCalls).toBe(2);
+      expect(events.filter((event) => event.type === "turn_failed")).toEqual([]);
+      expect(events.filter((event) => event.type === "turn_completed")).toHaveLength(1);
+    } finally {
+      await session.close();
+    }
+  });
+
+  test("settles when a failed wait finds the session already idle", async () => {
+    const harness = new V2Harness();
+    harness.wait = async () => {
+      harness.waitCalls += 1;
+      throw new Error("Transport");
+    };
+    harness.activeSessions = {};
+    harness.prompt = async () => {
+      harness.history.push({
+        id: "answer",
+        type: "assistant",
+        agent: "build",
+        model: { providerID: "test", id: "model" },
+        time: { created: 2 },
+        content: [{ type: "text", text: "done" }],
+      });
+    };
+    const client = new OpenCodeV2AgentClient({
+      logger: createTestLogger(),
+      runtime: harness.runtime,
+    });
+    const session = await client.createSession({ provider: "opencode", cwd: "/tmp/project" });
+    const events: AgentStreamEvent[] = [];
+    session.subscribe((event) => events.push(event));
+    try {
+      await session.run("hello");
+      expect(harness.waitCalls).toBe(1);
+      expect(events.filter((event) => event.type === "turn_completed")).toHaveLength(1);
+    } finally {
+      await session.close();
+    }
+  });
+
   test("reports context window usage for the selected model on turn completion", async () => {
     const harness = new V2Harness();
     harness.info.model = { providerID: "provider", id: "model" };

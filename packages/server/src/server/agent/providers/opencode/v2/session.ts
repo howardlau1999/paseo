@@ -96,6 +96,7 @@ export class OpenCodeV2Session implements AgentSession {
       id: info.id,
       cwd: config.cwd,
       signal: this.abort.signal,
+      logger: this.logger,
       emit: (event) => this.emit(event),
       reconcile: async () => {
         await this.reconcile();

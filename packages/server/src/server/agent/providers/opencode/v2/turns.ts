@@ -2,6 +2,8 @@ import { structuredOutput } from "./structured-output.js";
 import type { SessionInfo, SessionMessageInfo } from "@opencode/client";
 
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
+import type { Logger } from "pino";
 
 import type {
   AgentPromptInput,
@@ -19,6 +21,10 @@ import { renderPromptAttachmentAsText } from "../../../prompt-attachments.js";
 import { commands } from "./commands.js";
 
 import type { V2Api } from "./api.js";
+
+/** Backoff before re-issuing a long-poll `session.wait` that failed while the turn runs. */
+const TURN_SETTLEMENT_RETRY_MS = 1_000;
+
 interface TurnSnapshot {
   info: SessionInfo;
   history: SessionMessageInfo[];
@@ -28,6 +34,7 @@ interface TurnOptions {
   id: string;
   cwd: string;
   signal: AbortSignal;
+  logger: Logger;
   emit(event: AgentStreamEvent): void;
   reconcile(): Promise<TurnSnapshot>;
   clearPermissions(): Promise<void>;
@@ -148,10 +155,7 @@ export class SessionTurns {
     });
   }
   private async finish(id: string) {
-    await this.options.client.session.wait(
-      { sessionID: this.options.id },
-      { signal: this.options.signal },
-    );
+    await this.awaitTurnSettlement();
     const { info, history } = await this.options.reconcile();
     if (this.turn?.id !== id) return;
     if (info.outcome !== "failed" && info.outcome !== "interrupted")
@@ -181,6 +185,34 @@ export class SessionTurns {
         turnId: id,
         usage: await this.options.usage(info, history),
       });
+  }
+  /**
+   * `session.wait` is a long poll that only answers once the turn settles, so undici's
+   * default 300s headersTimeout aborts it mid-turn and surfaces as a bogus
+   * `Transport / fetch failed / Headers Timeout Error` turn failure. Treat the session's
+   * own active state as the source of truth and keep waiting instead.
+   */
+  private async awaitTurnSettlement(): Promise<void> {
+    while (true) {
+      try {
+        await this.options.client.session.wait(
+          { sessionID: this.options.id },
+          { signal: this.options.signal },
+        );
+        return;
+      } catch (error) {
+        if (this.options.signal.aborted) throw error;
+        const active = await this.options.client.session.active({
+          signal: this.options.signal,
+        });
+        if (!active[this.options.id]) return;
+        this.options.logger.warn(
+          { error: toDiagnosticErrorMessage(error), sessionId: this.options.id },
+          "OpenCode session wait failed while the turn is still running; retrying",
+        );
+        await delay(TURN_SETTLEMENT_RETRY_MS, undefined, { signal: this.options.signal });
+      }
+    }
   }
   private async readExecutionError(): Promise<string> {
     let message = "OpenCode execution failed";
