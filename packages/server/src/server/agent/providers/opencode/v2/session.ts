@@ -17,6 +17,7 @@ import type {
   AgentSession,
   AgentSessionConfig,
   AgentStreamEvent,
+  AgentUsage,
   SteerActiveTurnOptions,
   SteerResult,
 } from "../../../agent-sdk-types.js";
@@ -29,7 +30,13 @@ import { composeSystemPromptParts } from "../../../system-prompt.js";
 import { raceProviderRefreshAbort } from "../../../provider-refresh-deadline.js";
 
 import { type V2Connection } from "./runtime.js";
-import { modelRef, modesFromV2 } from "./mapping.js";
+import {
+  contextWindowUsedTokensFromV2,
+  modelContextWindowLookup,
+  modelRef,
+  modesFromV2,
+  usageFromV2,
+} from "./mapping.js";
 
 import { V2_CAPABILITIES } from "./capabilities.js";
 import { features } from "./configuration.js";
@@ -61,6 +68,9 @@ export class OpenCodeV2Session implements AgentSession {
   private closed = false;
   private history: SessionMessageInfo[] = [];
   private modes: AgentMode[] = [];
+  private modelContextWindows = new Map<string, number>();
+  private modelContextWindowRefresh: Promise<void> | null = null;
+  private emittedUsageKey: string | null = null;
   constructor(
     private readonly connection: V2Connection,
     private info: SessionInfo,
@@ -95,6 +105,7 @@ export class OpenCodeV2Session implements AgentSession {
         for (const request of this.permissions.list())
           await this.permissions.respondToPermission(request.id, { behavior: "deny" });
       },
+      usage: (sessionInfo, history) => this.usage(sessionInfo, history),
     });
   }
   get id() {
@@ -152,6 +163,13 @@ export class OpenCodeV2Session implements AgentSession {
         value: system,
       });
     this.modes = modesFromV2((await this.client.agent.list({ location })).data);
+    await this.refreshModelContextWindows().catch((error: unknown) => {
+      // Not fatal: the meter simply stays hidden until a later refresh succeeds.
+      this.logger.warn(
+        { error: toDiagnosticErrorMessage(error) },
+        "OpenCode model list failed; context window size is unavailable",
+      );
+    });
     this.timeline.messages(await messages(this.client, this.id));
     let ready!: () => void;
     let fail!: (error: unknown) => void;
@@ -239,6 +257,8 @@ export class OpenCodeV2Session implements AgentSession {
       },
     });
     this.config.model = model ?? undefined;
+    this.info = await this.client.session.get({ sessionID: this.id });
+    this.emitUsage(await this.usage(this.info, this.history));
     this.emit({
       type: "model_changed",
       provider: "opencode",
@@ -326,6 +346,55 @@ export class OpenCodeV2Session implements AgentSession {
     this.history = history;
     for (const event of this.timeline.messages(history)) this.emitTimeline(event);
     await this.permissions.reconcile(this.id);
+    this.emitUsage(await this.usage(info, history));
+  }
+  private async refreshModelContextWindows(): Promise<void> {
+    if (this.modelContextWindowRefresh) return this.modelContextWindowRefresh;
+    this.modelContextWindowRefresh = (async () => {
+      try {
+        const models = await this.client.model.list({ location: { directory: this.config.cwd } });
+        this.modelContextWindows = modelContextWindowLookup(models.data);
+      } finally {
+        this.modelContextWindowRefresh = null;
+      }
+    })();
+    return this.modelContextWindowRefresh;
+  }
+  private async resolveContextWindowMaxTokens(info: SessionInfo): Promise<number | undefined> {
+    const model = info.model;
+    if (!model) return undefined;
+    const key = `${model.providerID}/${model.id}`;
+    const known = this.modelContextWindows.get(key);
+    if (known !== undefined) return known;
+    // The window can arrive after the session starts (provider refresh, model switch), so a
+    // miss triggers one lookup instead of permanently hiding the meter.
+    await this.refreshModelContextWindows().catch(() => undefined);
+    return this.modelContextWindows.get(key);
+  }
+  private async usage(info: SessionInfo, history: SessionMessageInfo[]): Promise<AgentUsage> {
+    return usageFromV2(info, {
+      contextWindowMaxTokens: await this.resolveContextWindowMaxTokens(info),
+      contextWindowUsedTokens: contextWindowUsedTokensFromV2(history),
+    });
+  }
+  private emitUsage(usage: AgentUsage) {
+    if (usage.contextWindowUsedTokens === undefined) return;
+    const key = [
+      usage.inputTokens,
+      usage.outputTokens,
+      usage.cachedInputTokens,
+      usage.totalCostUsd,
+      usage.contextWindowMaxTokens,
+      usage.contextWindowUsedTokens,
+    ].join(":");
+    if (key === this.emittedUsageKey) return;
+    this.emittedUsageKey = key;
+    this.emit({
+      type: "usage_updated",
+      provider: "opencode",
+      usage,
+      ...(this.turns.id ? { turnId: this.turns.id } : {}),
+    });
   }
   private async reconcile() {
     this.dirty = true;

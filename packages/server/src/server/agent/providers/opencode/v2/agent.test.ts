@@ -275,6 +275,64 @@ describe("OpenCode v2 session lifecycle", () => {
     expect(harness.releases).toBe(1);
   });
 
+  test("reports context window usage for the selected model on turn completion", async () => {
+    const harness = new V2Harness();
+    harness.info.model = { providerID: "provider", id: "model" };
+    harness.models = [
+      {
+        id: "model",
+        modelID: "model",
+        providerID: "provider",
+        name: "Model",
+        capabilities: { tools: true, input: ["text"], output: ["text"] },
+        variants: [],
+        time: { released: 1 },
+        cost: [],
+        status: "active",
+        enabled: true,
+        limit: { context: 1_024_000, output: 10_000 },
+      },
+    ];
+    harness.info.tokens = { input: 900, output: 100, reasoning: 0, cache: { read: 0, write: 0 } };
+    harness.prompt = async () => {
+      harness.history.push({
+        id: "answer",
+        type: "assistant",
+        agent: "build",
+        model: { providerID: "provider", id: "model" },
+        time: { created: 2 },
+        content: [{ type: "text", text: "done" }],
+        tokens: { input: 900, output: 100, reasoning: 20, cache: { read: 5000, write: 0 } },
+      });
+    };
+    const client = new OpenCodeV2AgentClient({
+      logger: createTestLogger(),
+      runtime: harness.runtime,
+    });
+    const session = await client.createSession({ provider: "opencode", cwd: "/tmp/project" });
+    const events: AgentStreamEvent[] = [];
+    session.subscribe((event) => events.push(event));
+    try {
+      await session.run("hello");
+      expect(events.find((event) => event.type === "turn_completed")).toMatchObject({
+        usage: {
+          inputTokens: 900,
+          outputTokens: 100,
+          contextWindowMaxTokens: 1_024_000,
+          contextWindowUsedTokens: 6020,
+        },
+      });
+      expect(events.find((event) => event.type === "usage_updated")).toMatchObject({
+        usage: {
+          contextWindowMaxTokens: 1_024_000,
+          contextWindowUsedTokens: 6020,
+        },
+      });
+    } finally {
+      await session.close();
+    }
+  });
+
   test("waits for interruption settlement before submitting replacement work", async () => {
     const harness = new V2Harness();
     let finishFirst!: () => void;

@@ -7,6 +7,7 @@ import type {
   AgentPromptInput,
   AgentRunOptions,
   AgentStreamEvent,
+  AgentUsage,
   SteerActiveTurnOptions,
   SteerResult,
 } from "../../../agent-sdk-types.js";
@@ -14,8 +15,6 @@ import type {
 import { toDiagnosticErrorMessage } from "../../diagnostic-utils.js";
 
 import { renderPromptAttachmentAsText } from "../../../prompt-attachments.js";
-
-import { usageFromV2 } from "./mapping.js";
 
 import { commands } from "./commands.js";
 
@@ -32,6 +31,7 @@ interface TurnOptions {
   emit(event: AgentStreamEvent): void;
   reconcile(): Promise<TurnSnapshot>;
   clearPermissions(): Promise<void>;
+  usage(info: SessionInfo, history: SessionMessageInfo[]): Promise<AgentUsage>;
 }
 interface Turn {
   output?: ReturnType<typeof structuredOutput>;
@@ -179,7 +179,7 @@ export class SessionTurns {
         type: "turn_completed",
         provider: "opencode",
         turnId: id,
-        usage: usageFromV2(info),
+        usage: await this.options.usage(info, history),
       });
   }
   private async readExecutionError(): Promise<string> {
