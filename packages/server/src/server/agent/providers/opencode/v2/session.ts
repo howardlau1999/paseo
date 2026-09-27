@@ -8,7 +8,6 @@ import type { SessionInfo, SessionMessageInfo } from "@opencode/client";
 import { setTimeout as delay } from "node:timers/promises";
 import type { Logger } from "pino";
 import type {
-  AgentLaunchContext,
   AgentMode,
   AgentPermissionResponse,
   AgentPersistenceHandle,
@@ -118,7 +117,7 @@ export class OpenCodeV2Session implements AgentSession {
   private get client() {
     return this.connection.client;
   }
-  async initialize(launch?: AgentLaunchContext) {
+  async initialize(env?: Record<string, string>) {
     void this.connection.exited.then((error) => {
       if (this.closed) return;
       this.abort.abort(error);
@@ -129,8 +128,8 @@ export class OpenCodeV2Session implements AgentSession {
     await waitForLocationReady({ client: this.client, location, signal: this.abort.signal });
     if (this.requiresPaseoPlugin)
       await awaitPaseoPlugin({ client: this.client, location, signal: this.abort.signal });
-    if (launch?.env)
-      await this.client.session.environment({ sessionID: this.id, variables: launch.env });
+    // This API replaces the entire session environment, so callers must supply the merged env.
+    if (env) await this.client.session.environment({ sessionID: this.id, variables: env });
     for (const [server, config] of Object.entries(this.config.mcpServers ?? {})) {
       await this.client.mcp.add({
         server,
