@@ -30,10 +30,9 @@ import type {
   ProviderRefreshContext,
 } from "../../../agent-sdk-types.js";
 import {
-  createProviderEnvSpec,
+  createProviderEnv,
   type ProviderRuntimeSettings,
 } from "../../../provider-launch-config.js";
-import { createExternalProcessEnv } from "../../../../paseo-env.js";
 import type { ManagedProcessRegistry } from "../../../../managed-processes/managed-processes.js";
 
 import { importSessionFromPersistence } from "../../../provider-session-import.js";
@@ -159,6 +158,11 @@ export class OpenCodeV2AgentClient implements AgentClient {
     launch: AgentLaunchContext | undefined,
     persist: boolean,
   ) {
+    const acquire = () =>
+      this.runtime.acquire(
+        requiresDedicatedV2Server(config, launch) ? { env: launch?.env, dedicated: true } : {},
+      );
+    let ownedConnection = connection;
     const unbind = this.options.bridge?.bindSession({
       sessionId: info.id,
       env: launch?.env ?? {},
@@ -166,7 +170,7 @@ export class OpenCodeV2AgentClient implements AgentClient {
     });
     const bound = new Map<string, () => void>();
     const bindChild = (childId: string) => {
-      this.connections.set(childId, connection);
+      this.connections.set(childId, ownedConnection);
       if (bound.has(childId)) return;
       const childUnbind = this.options.bridge?.bindSession({
         sessionId: childId,
@@ -180,7 +184,12 @@ export class OpenCodeV2AgentClient implements AgentClient {
       unbind?.();
       for (const cleanup of bound.values()) cleanup();
       for (const [id, owner] of this.connections)
-        if (owner === connection) this.connections.delete(id);
+        if (owner === ownedConnection) this.connections.delete(id);
+    };
+    const moved = (next: V2Connection) => {
+      for (const [id, owner] of this.connections)
+        if (owner === ownedConnection) this.connections.set(id, next);
+      ownedConnection = next;
     };
     const session = new OpenCodeV2Session(
       connection,
@@ -191,21 +200,19 @@ export class OpenCodeV2AgentClient implements AgentClient {
       Boolean(this.options.bridge),
       releaseBindings,
       bindChild,
+      acquire,
+      moved,
     );
     try {
       if (this.options.bridge) {
         const location = { directory: config.cwd };
         await awaitPaseoPlugin({ client: connection.client, location });
       }
-      let env: Record<string, string> | undefined;
-      if (launch?.env) {
-        const spec = createProviderEnvSpec({
-          runtimeSettings: this.options.settings,
-          overlays: [launch.env],
-        });
-        env = createExternalProcessEnv(process.env, spec.envOverlay);
-      }
-      await session.initialize(env);
+      await session.initialize(
+        launch?.env
+          ? createProviderEnv({ runtimeSettings: this.options.settings, overlays: [launch.env] })
+          : undefined,
+      );
       return session;
     } catch (error) {
       await session.close();

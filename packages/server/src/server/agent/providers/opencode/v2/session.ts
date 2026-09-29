@@ -61,6 +61,10 @@ export class OpenCodeV2Session implements AgentSession {
   private readonly turns: SessionTurns;
   private readonly children: SessionChildren;
   private stream: Promise<void> | null = null;
+  private streamAbort = new AbortController();
+  private exited = false;
+  private reconnecting: Promise<void> | null = null;
+  private launchEnv: Record<string, string> | undefined;
   private sync: Promise<void> = Promise.resolve();
   private dirty = false;
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -71,7 +75,7 @@ export class OpenCodeV2Session implements AgentSession {
   private modelContextWindowRefresh: Promise<void> | null = null;
   private emittedUsageKey: string | null = null;
   constructor(
-    private readonly connection: V2Connection,
+    private connection: V2Connection,
     private info: SessionInfo,
     private readonly config: AgentSessionConfig,
     private readonly logger: Logger,
@@ -79,19 +83,24 @@ export class OpenCodeV2Session implements AgentSession {
     private readonly requiresPaseoPlugin: boolean,
     private readonly unbind?: () => void,
     bindChild?: (id: string) => void,
+    private readonly acquire?: () => Promise<V2Connection>,
+    private readonly moved?: (connection: V2Connection) => void,
   ) {
-    this.permissions = new SessionPermissions(connection.client, info.id, config, (event) =>
-      this.emit(event),
+    this.permissions = new SessionPermissions(
+      () => this.client,
+      info.id,
+      config,
+      (event) => this.emit(event),
     );
     this.children = new SessionChildren({
-      client: connection.client,
+      client: () => this.client,
       id: info.id,
       emit: (event) => this.emit(event),
       reconcilePermissions: (id) => this.permissions.reconcile(id),
       bindChild,
     });
     this.turns = new SessionTurns({
-      client: connection.client,
+      client: () => this.client,
       id: info.id,
       cwd: config.cwd,
       signal: this.abort.signal,
@@ -117,19 +126,38 @@ export class OpenCodeV2Session implements AgentSession {
   private get client() {
     return this.connection.client;
   }
-  async initialize(env?: Record<string, string>) {
-    void this.connection.exited.then((error) => {
-      if (this.closed) return;
-      this.abort.abort(error);
+  async initialize(environment?: Record<string, string>) {
+    // OpenCode replaces the whole local shell environment, rather than overlaying it.
+    this.launchEnv = environment;
+    this.watchExit(this.connection);
+    await this.configureConnection();
+    const location = { directory: this.config.cwd };
+    this.modes = modesFromV2((await this.client.agent.list({ location })).data);
+    await this.refreshModelContextWindows().catch((error: unknown) => {
+      // Not fatal: the meter simply stays hidden until a later refresh succeeds.
+      this.logger.warn(
+        { error: toDiagnosticErrorMessage(error) },
+        "OpenCode model list failed; context window size is unavailable",
+      );
+    });
+    this.timeline.messages(await messages(this.client, this.id));
+    await this.startStream();
+    await this.children.reconcile(this.id);
+  }
+  private watchExit(connection: V2Connection) {
+    void connection.exited.then((error) => {
+      if (this.closed || this.connection !== connection) return undefined;
+      this.exited = true;
+      this.streamAbort.abort(error);
       this.turns.fail(error);
       return undefined;
     });
+  }
+  private async configureConnection() {
     const location = { directory: this.config.cwd };
     await waitForLocationReady({ client: this.client, location, signal: this.abort.signal });
     if (this.requiresPaseoPlugin)
       await awaitPaseoPlugin({ client: this.client, location, signal: this.abort.signal });
-    // This API replaces the entire session environment, so callers must supply the merged env.
-    if (env) await this.client.session.environment({ sessionID: this.id, variables: env });
     for (const [server, config] of Object.entries(this.config.mcpServers ?? {})) {
       await this.client.mcp.add({
         server,
@@ -162,15 +190,8 @@ export class OpenCodeV2Session implements AgentSession {
         key: "paseo",
         value: system,
       });
-    this.modes = modesFromV2((await this.client.agent.list({ location })).data);
-    await this.refreshModelContextWindows().catch((error: unknown) => {
-      // Not fatal: the meter simply stays hidden until a later refresh succeeds.
-      this.logger.warn(
-        { error: toDiagnosticErrorMessage(error) },
-        "OpenCode model list failed; context window size is unavailable",
-      );
-    });
-    this.timeline.messages(await messages(this.client, this.id));
+  }
+  private async startStream() {
     let ready!: () => void;
     let fail!: (error: unknown) => void;
     const first = new Promise<void>((resolve, reject) => {
@@ -182,7 +203,41 @@ export class OpenCodeV2Session implements AgentSession {
       AbortSignal.any([this.abort.signal, AbortSignal.timeout(30_000)]),
       first,
     );
-    await this.children.reconcile(this.id);
+  }
+  private async reconnectIfExited() {
+    if (this.closed) throw new Error("OpenCode session is closed");
+    if (!this.exited) return;
+    this.reconnecting ??= this.reconnect().finally(() => {
+      this.reconnecting = null;
+    });
+    await this.reconnecting;
+  }
+  private async reconnect() {
+    if (!this.acquire) throw new Error("OpenCode helper server exited");
+    await this.stream;
+    await this.sync.catch(() => undefined);
+    const next = await this.acquire();
+    if (this.closed) {
+      await next.release();
+      throw new Error("OpenCode session is closed");
+    }
+    const old = this.connection;
+    this.connection = next;
+    this.streamAbort = new AbortController();
+    this.exited = false;
+    this.watchExit(next);
+    try {
+      await this.configureConnection();
+      await this.startStream();
+    } catch (error) {
+      this.connection = old;
+      this.exited = true;
+      this.streamAbort.abort();
+      await next.release();
+      throw error;
+    }
+    this.moved?.(next);
+    await old.release();
   }
   subscribe(callback: (event: AgentStreamEvent) => void) {
     this.listeners.add(callback);
@@ -213,10 +268,12 @@ export class OpenCodeV2Session implements AgentSession {
     this.emit({ ...event, ...(this.turns.id ? { turnId: this.turns.id } : {}) });
   }
   async *streamHistory() {
+    await this.reconnectIfExited();
     const history = new V2Timeline(false);
     yield* history.messages(await messages(this.client, this.id));
   }
   async getRuntimeInfo() {
+    await this.reconnectIfExited();
     this.info = await this.client.session.get({ sessionID: this.id });
     return {
       provider: "opencode",
@@ -233,6 +290,7 @@ export class OpenCodeV2Session implements AgentSession {
     return this.info.agent ?? null;
   }
   async setMode(modeId: string) {
+    await this.reconnectIfExited();
     await this.client.session.switchAgent({ sessionID: this.id, agent: modeId });
     this.info.agent = modeId;
     this.config.modeId = modeId;
@@ -244,28 +302,52 @@ export class OpenCodeV2Session implements AgentSession {
     });
   }
   async setModel(model: string | null) {
-    const selected = model
-      ? modelRef(model, this.config.thinkingOptionId)
-      : (await this.client.model.default({ location: { directory: this.config.cwd } })).data;
+    await this.reconnectIfExited();
+    const location = { directory: this.config.cwd };
+    const selected = model ? modelRef(model) : (await this.client.model.default({ location })).data;
     if (!selected) throw new Error("OpenCode has no default model");
-    await this.client.session.switchModel({
-      sessionID: this.id,
-      model: {
-        id: selected.id,
-        providerID: selected.providerID,
-        variant: this.config.thinkingOptionId,
-      },
-    });
+    const catalog = await this.client.model.list({ location });
+    const target = catalog.data.find(
+      (entry) =>
+        entry.enabled && entry.providerID === selected.providerID && entry.id === selected.id,
+    );
+    if (!target)
+      throw new Error(`OpenCode model unavailable: ${selected.providerID}/${selected.id}`);
+    const retainedVariant = this.config.thinkingOptionId;
+    const variant =
+      retainedVariant !== "default" && target.variants.some((entry) => entry.id === retainedVariant)
+        ? retainedVariant
+        : undefined;
+    const nextModel = {
+      id: selected.id,
+      providerID: selected.providerID,
+      ...(variant ? { variant } : {}),
+    };
+    await this.client.session.switchModel({ sessionID: this.id, model: nextModel });
+    this.info.model = nextModel;
     this.config.model = model ?? undefined;
-    this.info = await this.client.session.get({ sessionID: this.id });
+    this.config.thinkingOptionId = variant;
     this.emitUsage(await this.usage(this.info, this.history));
+    this.emit({
+      type: "thinking_option_changed",
+      provider: "opencode",
+      thinkingOptionId: variant ?? null,
+    });
     this.emit({
       type: "model_changed",
       provider: "opencode",
-      runtimeInfo: await this.getRuntimeInfo(),
+      runtimeInfo: {
+        provider: "opencode",
+        sessionId: this.id,
+        model: `${selected.providerID}/${selected.id}`,
+        modeId: this.info.agent ?? null,
+        thinkingOptionId: variant ?? null,
+      },
     });
   }
+
   async setThinkingOption(variant: string | null) {
+    await this.reconnectIfExited();
     const model = this.info.model;
     if (!model) throw new Error("Select an OpenCode model before changing its variant");
     await this.client.session.switchModel({
@@ -286,6 +368,7 @@ export class OpenCodeV2Session implements AgentSession {
           await this.respondToPermission(request.id, { behavior: "allow" });
   }
   async listCommands() {
+    await this.reconnectIfExited();
     return commands(this.client, this.config.cwd);
   }
   describePersistence(): AgentPersistenceHandle {
@@ -307,7 +390,8 @@ export class OpenCodeV2Session implements AgentSession {
         item.type === "assistant_message" ? current + item.text : current,
     });
   }
-  startTurn(prompt: AgentPromptInput, options?: AgentRunOptions) {
+  async startTurn(prompt: AgentPromptInput, options?: AgentRunOptions) {
+    await this.reconnectIfExited();
     this.timeline.expectUserPrompt(promptText(prompt));
     return this.turns.startTurn(prompt, options);
   }
@@ -324,6 +408,7 @@ export class OpenCodeV2Session implements AgentSession {
   }
   async revertBoth(input: { messageId: string }) {
     await this.interrupt();
+    await this.reconnectIfExited();
     await this.client.session.revert.stage({
       sessionID: this.id,
       messageID: input.messageId,
@@ -335,6 +420,7 @@ export class OpenCodeV2Session implements AgentSession {
     return [...this.permissions.list()];
   }
   async respondToPermission(requestId: string, response: AgentPermissionResponse) {
+    await this.reconnectIfExited();
     await this.permissions.respondToPermission(requestId, response);
   }
   private async reconcileSnapshot() {
@@ -408,6 +494,10 @@ export class OpenCodeV2Session implements AgentSession {
     }
   }
   private async reconcileConnection() {
+    // Session environments are process-local. Reapply this agent's snapshot before
+    // reconciling a new connection, including event-stream reconnections.
+    if (this.launchEnv)
+      await this.client.session.environment({ sessionID: this.id, variables: this.launchEnv });
     await this.reconcile();
     await this.children.reconcile(this.id);
     const active = await this.client.session.active();
@@ -461,11 +551,12 @@ export class OpenCodeV2Session implements AgentSession {
     this.turns.observeActiveTurn();
   }
   private async consume(ready: () => void, fail: (error: unknown) => void) {
+    const signal = AbortSignal.any([this.abort.signal, this.streamAbort.signal]);
     let connected = false;
-    while (!this.closed && !this.abort.signal.aborted) {
+    while (!this.closed && !signal.aborted) {
       try {
-        for await (const event of this.client.event.subscribe({ signal: this.abort.signal })) {
-          if (this.closed || this.abort.signal.aborted) return;
+        for await (const event of this.client.event.subscribe({ signal })) {
+          if (this.closed || signal.aborted) return;
           if (event.type === "server.connected") {
             this.timeline.resetStreams();
             await this.reconcileConnection();
@@ -477,7 +568,7 @@ export class OpenCodeV2Session implements AgentSession {
         }
         if (!connected) throw new Error("OpenCode event stream ended before connecting");
       } catch (error) {
-        if (this.closed || this.abort.signal.aborted) return;
+        if (this.closed || signal.aborted) return;
         if (!connected) {
           fail(error);
           return;
@@ -487,15 +578,17 @@ export class OpenCodeV2Session implements AgentSession {
           "OpenCode event stream interrupted; reconciling on reconnect",
         );
       }
-      await delay(100, undefined, { signal: this.abort.signal }).catch(() => undefined);
+      await delay(100, undefined, { signal }).catch(() => undefined);
     }
   }
   async close() {
     if (this.closed) return;
     this.closed = true;
     this.abort.abort();
+    this.streamAbort.abort();
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
     await this.stream;
+    await this.reconnecting?.catch(() => undefined);
     await this.sync.catch(() => undefined);
     this.unbind?.();
     try {

@@ -459,6 +459,7 @@ export function wrapSessionProvider(provider: AgentProvider, inner: AgentSession
       }
     },
     getRuntimeInfo: async () => mapRuntimeInfo(provider, await inner.getRuntimeInfo()),
+    getUsageReference: inner.getUsageReference?.bind(inner),
     getAvailableModes: () => inner.getAvailableModes(),
     getCurrentMode: () => inner.getCurrentMode(),
     setMode: (modeId) => inner.setMode(modeId),
@@ -488,6 +489,8 @@ function wrapClientProvider(
   const listImportableSessions = inner.listImportableSessions?.bind(inner);
   const importSession = inner.importSession?.bind(inner);
   const listFeatures = inner.listFeatures?.bind(inner);
+  const archiveNativeSession = inner.archiveNativeSession?.bind(inner);
+  const unarchiveNativeSession = inner.unarchiveNativeSession?.bind(inner);
 
   return {
     provider,
@@ -575,6 +578,12 @@ function wrapClientProvider(
             persistence,
           };
         }
+      : undefined,
+    archiveNativeSession: archiveNativeSession
+      ? async (handle) => await archiveNativeSession({ ...handle, provider: inner.provider })
+      : undefined,
+    unarchiveNativeSession: unarchiveNativeSession
+      ? async (handle) => await unarchiveNativeSession({ ...handle, provider: inner.provider })
       : undefined,
     getCatalogCacheKey: inner.getCatalogCacheKey?.bind(inner),
     isAvailable: (signal, options) => inner.isAvailable(signal, options),

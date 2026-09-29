@@ -4,8 +4,10 @@ import {
   mkdirSync,
   realpathSync,
   rmSync,
+  statSync,
   symlinkSync,
   unlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -475,7 +477,11 @@ describe("searchDirectoryEntries", () => {
       }),
     ).resolves.toEqual([]);
 
+    const cachedMetadata = statSync(dynamicRoot);
     mkdirSync(path.join(dynamicRoot, "fresh-project"));
+    // Fast child creation can share the cached timestamp on coarse-resolution filesystems.
+    const changedTime = new Date(cachedMetadata.mtimeMs + 1000);
+    utimesSync(dynamicRoot, cachedMetadata.atime, changedTime);
 
     await expect(
       searchDirectoryEntries({
@@ -778,22 +784,13 @@ describe("relative typed-entry configuration", () => {
   });
 
   it("suffix mode resolves exact workspace file paths before broad traversal", async () => {
-    const targetPath = path.join(
-      workspaceDir,
-      "packages",
-      "server",
-      "src",
-      "services",
-      "quota-fetcher",
-      "providers",
-      "local.ts",
-    );
+    const targetPath = path.join(workspaceDir, "plugins", "usage-sources", "providers", "local.ts");
     mkdirSync(path.dirname(targetPath), { recursive: true });
     writeFileSync(targetPath, "");
 
     const results = await searchRelativeDirectoryEntries({
       cwd: workspaceDir,
-      query: "packages/server/src/services/quota-fetcher/providers/local.ts",
+      query: "plugins/usage-sources/providers/local.ts",
       limit: 20,
       includeFiles: true,
       includeDirectories: false,
@@ -803,7 +800,7 @@ describe("relative typed-entry configuration", () => {
 
     expect(results).toEqual([
       {
-        path: "packages/server/src/services/quota-fetcher/providers/local.ts",
+        path: "plugins/usage-sources/providers/local.ts",
         kind: "file",
       },
     ]);
