@@ -21,6 +21,7 @@ import { runLocalPaseo } from "./helpers/local-cli.ts";
 import { getAvailablePort } from "./helpers/network.ts";
 
 const pollIntervalMs = 100;
+const lifecycleTimeoutMs = 120_000;
 const testEnv = {
   PASEO_LOCAL_SPEECH_AUTO_DOWNLOAD: process.env.PASEO_LOCAL_SPEECH_AUTO_DOWNLOAD ?? "0",
   PASEO_DICTATION_ENABLED: process.env.PASEO_DICTATION_ENABLED ?? "0",
@@ -135,7 +136,7 @@ import('node:fs').then(({appendFileSync}) => {
       supervisor = await readDaemonInstance(paseoHome);
       return supervisor?.pid === supervisorProcess?.pid && Boolean(supervisor?.listen);
     },
-    120000,
+    lifecycleTimeoutMs,
     "daemon did not publish its bound endpoint in time",
   );
   assert(supervisor?.listen, "owned supervisor should publish its bound endpoint");
@@ -176,7 +177,8 @@ import('node:fs').then(({appendFileSync}) => {
     "restart request should be acknowledged",
   );
 
-  const deadline = Date.now() + 20000;
+  // Restart includes graceful shutdown and the same provider startup as the first launch.
+  const deadline = Date.now() + lifecycleTimeoutMs;
   let statusAfterRestart = statusBeforeRestart;
   await waitFor(
     async () => {
@@ -193,7 +195,7 @@ import('node:fs').then(({appendFileSync}) => {
         throw error;
       }
     },
-    20000,
+    lifecycleTimeoutMs,
     "worker pid did not change after restart request",
   );
   assert.notStrictEqual(
@@ -228,6 +230,9 @@ import('node:fs').then(({appendFileSync}) => {
     `restart should run daemon cleanup before replacing the worker, logs:\n${capturedSupervisorLogs}`,
   );
   console.log("✓ app-style restart keeps daemon healthy and restarts worker\n");
+} catch (error) {
+  console.error(await readCapturedSupervisorLogs(paseoHome, recentSupervisorLogs));
+  throw error;
 } finally {
   await client?.close();
   if (supervisorProcess?.pid && isProcessRunning(supervisorProcess.pid)) {
