@@ -1793,6 +1793,7 @@ export const ptBR: TranslationResources = {
   },
   realtimeVoice: {
     actions: {
+      playbackVolume: "Volume de reprodução",
       mute: "Silenciar voz em tempo real",
       unmute: "Ativar voz em tempo real",
       stop: "Parar voz em tempo real e interromper a resposta",

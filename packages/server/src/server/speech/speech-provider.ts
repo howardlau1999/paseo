@@ -61,8 +61,12 @@ export interface SpeechToTextProvider {
 export interface SpeechStreamResult {
   stream: Readable;
   format: string;
+  /** PCM chunks can be forwarded to voice playback before the stream ends. */
+  streaming?: boolean;
 }
 
 export interface TextToSpeechProvider {
+  /** Streaming providers can keep one voice reply in a single synthesis request. */
+  readonly prefersWholeUtterance?: boolean;
   synthesizeSpeech(text: string): Promise<SpeechStreamResult>;
 }

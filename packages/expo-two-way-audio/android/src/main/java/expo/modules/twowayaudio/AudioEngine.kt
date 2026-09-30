@@ -30,6 +30,8 @@ class AudioEngine (context: Context) {
     private lateinit var audioTrack: AudioTrack
     private var audioFocusRequest: AudioFocusRequest? = null
     private val audioSampleQueue: Queue<ByteArray> = LinkedList()
+    private val audioSampleQueueLock = Any()
+    private var playbackWorkerScheduled = false
     private var echoCanceler: AcousticEchoCanceler? = null
     private var noiseSuppressor: NoiseSuppressor? = null
     private val executorServiceMicrophone = Executors.newFixedThreadPool(1)
@@ -46,7 +48,7 @@ class AudioEngine (context: Context) {
 
     var isRecording = false
     private var isRecordingBeforePause = false
-    var isPlaying = false
+    @Volatile var isPlaying = false
 
     // Callbacks
     var onMicDataCallback: ((ByteArray) -> Unit)? = null
@@ -297,8 +299,10 @@ class AudioEngine (context: Context) {
             audioTrack.pause()
         }
         releaseCommunicationRoute()
-        audioSampleQueue.clear()
-        isPlaying = false
+        synchronized(audioSampleQueueLock) {
+            audioSampleQueue.clear()
+            isPlaying = false
+        }
         isRecordingBeforePause = false
         onOutputVolumeCallback?.invoke(0.0F)
         onAudioInterruptionCallback?.let { it("blocked") }
@@ -401,40 +405,53 @@ class AudioEngine (context: Context) {
     @SuppressLint("NewApi")
     fun playPCMData(data: ByteArray) {
         acquireAudioSessionIfNeeded()
-        audioSampleQueue.add(data)
+        val queueSize = synchronized(audioSampleQueueLock) {
+            audioSampleQueue.add(data)
+            if (!playbackWorkerScheduled) {
+                playbackWorkerScheduled = true
+                isPlaying = true
+                playAudioFromSampleQueue()
+            }
+            audioSampleQueue.size
+        }
         playbackEvents += 1
         playbackQueuedBytes += data.size.toLong()
         Log.d(
             "AudioEngine",
-            "playPCMData queued bytes=${data.size} queueSize=${audioSampleQueue.size} " +
+            "playPCMData queued bytes=${data.size} queueSize=$queueSize " +
                 "head=${data.take(12).joinToString(" ") { byte -> "%02x".format(byte.toInt() and 0xff) }}"
         )
         flushBridgeStats("queue")
-        if (!isPlaying) {
-            playAudioFromSampleQueue()
-        }
     }
 
     private fun playAudioFromSampleQueue() {
         executorServicePlayback.execute{
-            isPlaying = true
             try {
-                while (audioSampleQueue.isNotEmpty()){
-                    val data = audioSampleQueue.poll()
-                    if (data != null){
-                        playSample(data)
-                        val audioVolume = calculateRMSLevel(data)
-                        onOutputVolumeCallback?.invoke(audioVolume)
-                    }else{
-                        break
-                    }
+                while (true) {
+                    val data = synchronized(audioSampleQueueLock) { audioSampleQueue.poll() } ?: break
+                    playSample(data)
+                    val audioVolume = calculateRMSLevel(data)
+                    onOutputVolumeCallback?.invoke(audioVolume)
                 }
             }catch (e: Exception){
                 Log.e("AudioEngine", "Error playing audio", e)
                 e.printStackTrace()
             }finally {
-                isPlaying = false
-                onOutputVolumeCallback?.invoke(0.0F)
+                // A new block may arrive after the queue looked empty but before this
+                // worker exits. Decide whether to restart while holding the same lock
+                // used by playPCMData, so that block cannot be stranded in the queue.
+                val restart = synchronized(audioSampleQueueLock) {
+                    playbackWorkerScheduled = false
+                    if (audioSampleQueue.isNotEmpty()) {
+                        playbackWorkerScheduled = true
+                        true
+                    } else {
+                        isPlaying = false
+                        false
+                    }
+                }
+                if (restart) playAudioFromSampleQueue()
+                else onOutputVolumeCallback?.invoke(0.0F)
             }
         }
     }
@@ -446,7 +463,7 @@ class AudioEngine (context: Context) {
         Log.d(
             "AudioEngine",
             "playSample wrote=$written requested=${data.size} playState=${audioTrack.playState} " +
-                "queueSize=${audioSampleQueue.size}"
+                "queueSize=${synchronized(audioSampleQueueLock) { audioSampleQueue.size }}"
         )
         flushBridgeStats("write")
     }
@@ -491,10 +508,12 @@ class AudioEngine (context: Context) {
     }
 
     fun stopPlayback() {
-        audioSampleQueue.clear()
+        synchronized(audioSampleQueueLock) {
+            audioSampleQueue.clear()
+            isPlaying = false
+        }
         audioTrack.pause()
         audioTrack.flush()
-        isPlaying = false
         onOutputVolumeCallback?.invoke(0.0F)
         Log.d("AudioEngine", "Playback stopped")
     }

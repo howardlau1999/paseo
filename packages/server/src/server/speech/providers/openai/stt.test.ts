@@ -21,6 +21,15 @@ vi.mock("openai", () => ({
 
 import { OpenAISTT } from "./stt.js";
 
+function readStream(stream: NodeJS.ReadableStream): Promise<Buffer> {
+  return new Promise<Buffer>((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    stream.on("data", (chunk: Buffer) => chunks.push(chunk));
+    stream.once("error", reject);
+    stream.once("end", () => resolve(Buffer.concat(chunks)));
+  });
+}
+
 describe("OpenAISTT", () => {
   afterEach(() => {
     openAiConstructorOptionsMock.mockReset();
@@ -86,5 +95,61 @@ describe("OpenAISTT", () => {
         response_format: "json",
       }),
     );
+  });
+
+  test("commits consecutive utterances with separate audio buffers", async () => {
+    transcriptionsCreateMock.mockImplementation(
+      async (request: { file: NodeJS.ReadableStream }) => {
+        const wav = await readStream(request.file);
+        return { text: `${wav[44]}/${wav.length - 44}` };
+      },
+    );
+
+    const provider = new OpenAISTT({ apiKey: "sk-test" }, pino({ level: "silent" }));
+    const session = provider.createSession({ logger: pino({ level: "silent" }), language: "zh" });
+    const transcripts: string[] = [];
+    const completed = new Promise<void>((resolve, reject) => {
+      session.on("transcript", (event) => {
+        if (event.isFinal) {
+          transcripts.push(event.transcript);
+          if (transcripts.length === 2) resolve();
+        }
+      });
+      session.on("error", reject);
+    });
+
+    await session.connect();
+    session.appendPcm16(Buffer.from([1, 0]));
+    session.commit();
+    session.appendPcm16(Buffer.from([2, 0]));
+    session.commit();
+    await completed;
+
+    expect(transcripts.sort()).toEqual(["1/2", "2/2"]);
+  });
+
+  test("omits auto language so the ASR server can detect it", async () => {
+    transcriptionsCreateMock.mockImplementation(
+      async (request: { file: NodeJS.ReadableStream }) => {
+        await readStream(request.file);
+        return { text: "你好" };
+      },
+    );
+    const provider = new OpenAISTT(
+      { apiKey: "local", model: "qwen3-asr" },
+      pino({ level: "silent" }),
+    );
+    const session = provider.createSession({ logger: pino({ level: "silent" }), language: "auto" });
+    const transcript = new Promise<string>((resolve, reject) => {
+      session.on("transcript", (event) => resolve(event.transcript));
+      session.on("error", reject);
+    });
+
+    await session.connect();
+    session.appendPcm16(Buffer.from([0, 0]));
+    session.commit();
+
+    await expect(transcript).resolves.toBe("你好");
+    expect(transcriptionsCreateMock.mock.calls[0]?.[0]).not.toHaveProperty("language");
   });
 });

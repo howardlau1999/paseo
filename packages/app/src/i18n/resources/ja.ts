@@ -1779,6 +1779,7 @@ export const ja: TranslationResources = {
   },
   realtimeVoice: {
     actions: {
+      playbackVolume: "再生音量",
       mute: "リアルタイム音声をミュート",
       unmute: "リアルタイム音声のミュートを解除",
       stop: "リアルタイム音声を停止してターンを中断",

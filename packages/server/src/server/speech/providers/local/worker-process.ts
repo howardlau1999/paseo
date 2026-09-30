@@ -69,6 +69,7 @@ function ttsKey(config: LocalSpeechWorkerConfig): string {
     config.voiceTtsModel,
     config.voiceTtsSpeakerId ?? 0,
     config.voiceTtsSpeed ?? 1,
+    process.env.PASEO_SHERPA_GPU_ENABLED === "1" ? "cuda" : "cpu",
   ].join(":");
 }
 
@@ -129,6 +130,7 @@ function getTtsProvider(config: LocalSpeechWorkerConfig): SherpaOnnxTTS {
       modelDir,
       speakerId: config.voiceTtsSpeakerId,
       speed: config.voiceTtsSpeed,
+      provider: process.env.PASEO_SHERPA_GPU_ENABLED === "1" ? "cuda" : "cpu",
     },
     logger,
   );

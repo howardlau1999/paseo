@@ -72,6 +72,43 @@ describe("resolveOpenAiSpeechConfig", () => {
     expect(resolved?.tts?.baseUrl).toBe("https://tts.example.com/v1");
   });
 
+  test("accepts Qwen TTS model, voice, and streaming options", () => {
+    const persisted = PersistedConfigSchema.parse({
+      features: {
+        voiceMode: {
+          tts: { provider: "openai", model: "qwen3-tts", voice: "vivian" },
+        },
+      },
+      providers: {
+        openai: {
+          tts: {
+            apiKey: "local-qwen",
+            baseUrl: "http://127.0.0.1:18082/v1",
+            language: "Chinese",
+            instructions: "说话稍快一些，语气轻松活泼。",
+            stream: true,
+          },
+        },
+      },
+    });
+
+    const resolved = resolveOpenAiSpeechConfig({
+      env: {} as NodeJS.ProcessEnv,
+      persisted,
+      providers: ALL_OPENAI,
+    });
+
+    expect(resolved?.tts).toMatchObject({
+      model: "qwen3-tts",
+      voice: "vivian",
+      baseUrl: "http://127.0.0.1:18082/v1",
+      language: "Chinese",
+      instructions: "说话稍快一些，语气轻松活泼。",
+      stream: true,
+      responseFormat: "pcm",
+    });
+  });
+
   test("prefers nested STT/TTS config over env and global fallbacks", () => {
     const persisted = PersistedConfigSchema.parse({
       providers: {

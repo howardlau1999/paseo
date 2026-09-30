@@ -10,8 +10,32 @@ interface QueuedAudio {
   reject: (error: Error) => void;
 }
 
+interface QueuedPcmPlayback {
+  timer: ReturnType<typeof setTimeout> | null;
+  resolve: (duration: number) => void;
+  reject: (error: Error) => void;
+  settled: boolean;
+}
+
 interface AudioEngineTraceOptions {
   traceLabel?: string;
+  nativeModule?: NativeAudioModule;
+}
+
+interface NativeAudioModule {
+  addExpoTwoWayAudioEventListener<T>(
+    event: string,
+    listener: (event: T) => void,
+  ): { remove(): void };
+  initialize(): Promise<boolean>;
+  getMicrophonePermissionsAsync(): Promise<{ granted: boolean }>;
+  requestMicrophonePermissionsAsync(): Promise<{ granted: boolean }>;
+  toggleRecording(enabled: boolean): boolean;
+  releaseAudioSession(): void;
+  resumePlayback(): void;
+  playPCMData(data: Uint8Array): void;
+  stopPlayback(): void;
+  tearDown(): void;
 }
 
 function parsePcmSampleRate(mimeType: string): number | null {
@@ -66,11 +90,27 @@ function resamplePcm16(pcm: Uint8Array, fromRate: number, toRate: number): Uint8
   return out;
 }
 
+function applyPlaybackGain(pcm: Uint8Array, gain: number): Uint8Array {
+  if (gain === 1) {
+    return pcm;
+  }
+  const output = new Uint8Array(pcm.length);
+  const inputView = new DataView(pcm.buffer, pcm.byteOffset, pcm.byteLength);
+  const outputView = new DataView(output.buffer);
+  for (let offset = 0; offset + 1 < pcm.length; offset += 2) {
+    const sample = inputView.getInt16(offset, true);
+    const amplified = Math.max(-32768, Math.min(32767, Math.round(sample * gain)));
+    outputView.setInt16(offset, amplified, true);
+  }
+  return output;
+}
+
 export function createAudioEngine(
   callbacks: AudioEngineCallbacks,
-  _options?: AudioEngineTraceOptions,
+  options?: AudioEngineTraceOptions,
 ): AudioEngine {
-  const native = require("@getpaseo/expo-two-way-audio");
+  const native: NativeAudioModule =
+    options?.nativeModule ?? require("@getpaseo/expo-two-way-audio");
 
   const refs: {
     initialized: boolean;
@@ -84,6 +124,11 @@ export function createAudioEngine(
       reject: (error: Error) => void;
       settled: boolean;
     } | null;
+    queuedPcm: Set<QueuedPcmPlayback>;
+    queuedPcmEnqueue: Promise<void>;
+    queuedPcmEndMs: number;
+    playbackGeneration: number;
+    playbackGain: number;
     destroyed: boolean;
   } = {
     initialized: false,
@@ -93,6 +138,11 @@ export function createAudioEngine(
     processingQueue: false,
     playbackTimeout: null,
     activePlayback: null,
+    queuedPcm: new Set(),
+    queuedPcmEnqueue: Promise.resolve(),
+    queuedPcmEndMs: 0,
+    playbackGeneration: 0,
+    playbackGain: 1,
     destroyed: false,
   };
 
@@ -153,7 +203,12 @@ export function createAudioEngine(
     if (!refs.initialized || refs.destroyed) {
       return;
     }
-    if (refs.captureActive || refs.activePlayback || refs.queue.length > 0) {
+    if (
+      refs.captureActive ||
+      refs.activePlayback ||
+      refs.queue.length > 0 ||
+      refs.queuedPcm.size > 0
+    ) {
       return;
     }
     // The wrapper no-ops on binaries whose native module predates this function.
@@ -179,6 +234,80 @@ export function createAudioEngine(
     }
   }
 
+  function settleQueuedPcm(
+    item: QueuedPcmPlayback,
+    result: { duration: number } | { error: Error },
+  ): void {
+    if (item.settled) return;
+    item.settled = true;
+    if (item.timer) clearTimeout(item.timer);
+    refs.queuedPcm.delete(item);
+    if ("error" in result) item.reject(result.error);
+    else item.resolve(result.duration);
+    if (refs.queuedPcm.size === 0) {
+      refs.queuedPcmEndMs = 0;
+      releaseSessionIfIdle();
+    }
+  }
+
+  function cancelQueuedPcm(): void {
+    refs.playbackGeneration += 1;
+    refs.queuedPcmEnqueue = Promise.resolve();
+    for (const item of refs.queuedPcm) {
+      settleQueuedPcm(item, { error: new Error("Playback stopped") });
+    }
+  }
+
+  function playQueuedPcm(audio: AudioPlaybackSource): Promise<number> {
+    const generation = refs.playbackGeneration;
+    let resolvePlayback!: (duration: number) => void;
+    let rejectPlayback!: (error: Error) => void;
+    const completion = new Promise<number>((resolve, reject) => {
+      resolvePlayback = resolve;
+      rejectPlayback = reject;
+    });
+    const item: QueuedPcmPlayback = {
+      timer: null,
+      resolve: resolvePlayback,
+      reject: rejectPlayback,
+      settled: false,
+    };
+    refs.queuedPcm.add(item);
+
+    const enqueue = refs.queuedPcmEnqueue.then(async () => {
+      await ensureInitialized();
+      const pcm = new Uint8Array(await audio.arrayBuffer());
+      if (item.settled || refs.playbackGeneration !== generation || refs.destroyed) {
+        return undefined;
+      }
+
+      const inputRate = parsePcmSampleRate(audio.type || "") ?? 24000;
+      const pcm16k = resamplePcm16(pcm, inputRate, 16000);
+      const duration = pcm16k.length / 2 / 16000;
+      native.resumePlayback();
+      native.playPCMData(applyPlaybackGain(pcm16k, refs.playbackGain));
+
+      // Native AudioTrack and AVAudioPlayerNode queue these buffers continuously.
+      // Keep acknowledgements tied to their estimated completion time.
+      const now = Date.now();
+      refs.queuedPcmEndMs = Math.max(now, refs.queuedPcmEndMs) + duration * 1000;
+      item.timer = setTimeout(
+        () => {
+          settleQueuedPcm(item, { duration });
+        },
+        Math.max(0, refs.queuedPcmEndMs - now),
+      );
+      return undefined;
+    });
+    refs.queuedPcmEnqueue = enqueue.catch(() => undefined);
+    void enqueue.catch((error: unknown) => {
+      settleQueuedPcm(item, {
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
+    });
+    return completion;
+  }
+
   async function playAudio(audio: AudioPlaybackSource): Promise<number> {
     await ensureInitialized();
 
@@ -196,7 +325,7 @@ export function createAudioEngine(
           const durationSec = pcm16k.length / 2 / 16000;
 
           native.resumePlayback();
-          native.playPCMData(pcm16k);
+          native.playPCMData(applyPlaybackGain(pcm16k, refs.playbackGain));
 
           clearPlaybackTimeout();
           refs.playbackTimeout = setTimeout(() => {
@@ -323,8 +452,15 @@ export function createAudioEngine(
       });
     },
 
+    playQueuedPcm,
+
+    setPlaybackGain(gain: number) {
+      refs.playbackGain = gain;
+    },
+
     stop() {
       native.stopPlayback();
+      cancelQueuedPcm();
       clearPlaybackTimeout();
       const active = refs.activePlayback;
       refs.activePlayback = null;
@@ -336,6 +472,10 @@ export function createAudioEngine(
     },
 
     clearQueue() {
+      if (refs.queuedPcm.size > 0) {
+        native.stopPlayback();
+        cancelQueuedPcm();
+      }
       while (refs.queue.length > 0) {
         refs.queue.shift()!.reject(new Error("Playback stopped"));
       }
@@ -344,7 +484,7 @@ export function createAudioEngine(
     },
 
     isPlaying() {
-      return refs.activePlayback !== null;
+      return refs.activePlayback !== null || refs.queuedPcm.size > 0;
     },
   };
 }

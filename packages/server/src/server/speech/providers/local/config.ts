@@ -84,6 +84,8 @@ function shouldIncludeLocalProviderConfig(params: {
   const localRequestedByFeature =
     (params.providers.dictationStt.enabled !== false &&
       params.providers.dictationStt.provider === "local") ||
+    (params.providers.voiceTurnDetection.enabled !== false &&
+      params.providers.voiceTurnDetection.provider === "local") ||
     (params.providers.voiceStt.enabled !== false &&
       params.providers.voiceStt.provider === "local") ||
     (params.providers.voiceTts.enabled !== false && params.providers.voiceTts.provider === "local");
@@ -202,7 +204,7 @@ export function resolveLocalSpeechConfig(params: {
 
   const resolvedVoiceTtsSpeakerId =
     parsed.voiceLocalTtsSpeakerId ??
-    (parsed.voiceLocalTtsModel === "kokoro-en-v0_19" ? 0 : undefined);
+    (parsed.voiceLocalTtsModel === "kokoro-multi-lang-v1_0" ? 48 : 0);
 
   return {
     sttLanguages: {

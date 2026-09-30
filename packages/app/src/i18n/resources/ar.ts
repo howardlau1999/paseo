@@ -1760,6 +1760,7 @@ export const ar: TranslationResources = {
   },
   realtimeVoice: {
     actions: {
+      playbackVolume: "مستوى صوت التشغيل",
       mute: "كتم صوت الوقت الحقيقي",
       unmute: "إلغاء كتم صوت الوقت الحقيقي",
       stop: "إيقاف الصوت في الوقت الحقيقي ومقاطعة الدوران",

@@ -7,6 +7,7 @@ import { createTestLogger } from "../../../../test-utils/test-logger.js";
 import { ClaudeAgentClient } from "./agent.js";
 import { claudeProjectDirSync } from "./project-dir.js";
 import { streamSession } from "../test-utils/session-stream-adapter.js";
+import { wrapSpokenInput } from "../../../voice-config.js";
 import type { AgentPersistenceHandle, AgentStreamEvent } from "../../agent-sdk-types.js";
 
 const queryFactory = vi.fn();
@@ -17,8 +18,8 @@ const HISTORY_USER_MARKER = "HISTORY_ONLY_USER_MARKER";
 const HISTORY_ASSISTANT_MARKER = "HISTORY_ONLY_ASSISTANT_MARKER";
 const HISTORY_SIDECHAIN_MARKER = "HISTORY_ONLY_SIDECHAIN_MARKER";
 
-function buildSdkQueryMock() {
-  const events = [
+function buildSdkQueryMock(
+  events: unknown[] = [
     {
       type: "system",
       subtype: "init",
@@ -42,8 +43,8 @@ function buildSdkQueryMock() {
       },
       total_cost_usd: 0,
     },
-  ];
-
+  ],
+) {
   let index = 0;
   return {
     next: vi.fn(async () => {
@@ -235,6 +236,166 @@ describe("ClaudeAgentSession history replay regression", () => {
     expect(timelineText).toContain(LIVE_REPLY_MARKER);
     expect(timelineText).not.toContain(HISTORY_USER_MARKER);
     expect(timelineText).not.toContain(HISTORY_ASSISTANT_MARKER);
+  });
+
+  test("shows only spoken text for a live Claude voice reply", async () => {
+    queryFactory.mockImplementation(() =>
+      buildSdkQueryMock([
+        {
+          type: "system",
+          subtype: "init",
+          session_id: "history-session",
+          permissionMode: "default",
+          model: "opus",
+        },
+        {
+          type: "assistant",
+          uuid: "voice-answer",
+          message: {
+            content: [
+              { type: "text", text: "Extra introduction." },
+              {
+                type: "tool_use",
+                id: "voice-call",
+                name: "mcp__paseo__speak",
+                input: { text: "The spoken reply." },
+              },
+            ],
+          },
+        },
+        {
+          type: "assistant",
+          uuid: "voice-extra-final",
+          message: { content: [{ type: "text", text: "Extra final summary." }] },
+        },
+        {
+          type: "result",
+          subtype: "success",
+          usage: { input_tokens: 1, cache_read_input_tokens: 0, output_tokens: 1 },
+          total_cost_usd: 0,
+        },
+      ]),
+    );
+    const client = new ClaudeAgentClient({
+      logger: createTestLogger(),
+      queryFactory,
+      resolveBinary: async () => "/test/claude/bin",
+    });
+    const session = await client.resumeSession(
+      {
+        provider: "claude",
+        sessionId: "history-session",
+        nativeHandle: "history-session",
+        metadata: { provider: "claude", cwd },
+      },
+      { cwd },
+    );
+    const events: AgentStreamEvent[] = [];
+    try {
+      for await (const event of streamSession(session, wrapSpokenInput("Say hello"))) {
+        events.push(event);
+        if (event.type === "turn_completed" || event.type === "turn_failed") break;
+      }
+    } finally {
+      await session.close();
+    }
+
+    expect(
+      events.filter(
+        (event) => event.type === "timeline" && event.item.type === "assistant_message",
+      ),
+    ).toEqual([]);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "timeline",
+        item: expect.objectContaining({
+          type: "tool_call",
+          name: "speak",
+          detail: { type: "unknown", input: "The spoken reply.", output: null },
+        }),
+      }),
+    );
+  });
+
+  test("replays Claude voice history without extra assistant text", async () => {
+    const historyPath = path.join(
+      claudeProjectDirSync(cwd, { configDir }),
+      "history-session.jsonl",
+    );
+    writeFileSync(
+      historyPath,
+      [
+        {
+          type: "user",
+          uuid: "voice-user",
+          message: { role: "user", content: wrapSpokenInput("Say hello") },
+        },
+        {
+          type: "assistant",
+          uuid: "voice-answer",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "text", text: "Extra introduction." },
+              {
+                type: "tool_use",
+                id: "voice-call",
+                name: "mcp__paseo__speak",
+                input: { text: "The spoken reply." },
+              },
+            ],
+          },
+        },
+        {
+          type: "assistant",
+          uuid: "voice-extra-final",
+          message: { role: "assistant", content: "Extra final summary." },
+        },
+        {
+          type: "user",
+          uuid: "typed-user",
+          message: { role: "user", content: "Typed prompt" },
+        },
+        {
+          type: "assistant",
+          uuid: "typed-answer",
+          message: { role: "assistant", content: "Normal written reply." },
+        },
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n"),
+      "utf8",
+    );
+    const client = new ClaudeAgentClient({
+      logger: createTestLogger(),
+      queryFactory,
+      resolveBinary: async () => "/test/claude/bin",
+    });
+    const session = await client.resumeSession(
+      {
+        provider: "claude",
+        sessionId: "history-session",
+        nativeHandle: "history-session",
+        metadata: { provider: "claude", cwd },
+      },
+      { cwd },
+    );
+    const events: AgentStreamEvent[] = [];
+    try {
+      for await (const event of session.streamHistory()) events.push(event);
+    } finally {
+      await session.close();
+    }
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "timeline",
+        item: expect.objectContaining({ type: "tool_call", name: "speak" }),
+      }),
+    );
+    expect(collectTimelineText(events)).toContain("Normal written reply.");
+    expect(collectTimelineText(events)).not.toContain("Extra introduction.");
+    expect(collectTimelineText(events)).not.toContain("Extra final summary.");
   });
 
   test("still exposes persisted history through streamHistory", async () => {

@@ -41,6 +41,24 @@ export const SHERPA_ONNX_MODEL_CATALOG = {
     description: "Kokoro TTS (higher quality; larger).",
     defaultFor: "tts",
   },
+  "kokoro-multi-lang-v1_0": {
+    kind: "tts",
+    archiveUrl:
+      "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-multi-lang-v1_0.tar.bz2",
+    extractedDir: "kokoro-multi-lang-v1_0",
+    requiredFiles: [
+      "model.onnx",
+      "voices.bin",
+      "tokens.txt",
+      "espeak-ng-data",
+      "lexicon-us-en.txt",
+      "lexicon-zh.txt",
+      "phone-zh.fst",
+      "date-zh.fst",
+      "number-zh.fst",
+    ],
+    description: "Kokoro TTS (Chinese and English; Chinese voice 48 by default).",
+  },
 } as const satisfies Record<string, SherpaOnnxCatalogEntry>;
 
 export type SherpaOnnxModelId = keyof typeof SHERPA_ONNX_MODEL_CATALOG;
