@@ -4,8 +4,10 @@ import {
   mkdirSync,
   realpathSync,
   rmSync,
+  statSync,
   symlinkSync,
   unlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -15,6 +17,7 @@ import { isPlatform } from "../test-utils/platform.js";
 import { startPathContainmentMetrics, stopPathContainmentMetrics } from "./path.js";
 import { startGitCommandMetrics, stopGitCommandMetrics } from "./run-git-command.js";
 import {
+  resolveAbsoluteQueryRoot,
   searchDirectoryEntries,
   WORKSPACE_SEARCH_HIDDEN_DIRECTORIES,
 } from "./directory-suggestions.js";
@@ -474,7 +477,11 @@ describe("searchDirectoryEntries", () => {
       }),
     ).resolves.toEqual([]);
 
+    const cachedMetadata = statSync(dynamicRoot);
     mkdirSync(path.join(dynamicRoot, "fresh-project"));
+    // Fast child creation can share the cached timestamp on coarse-resolution filesystems.
+    const changedTime = new Date(cachedMetadata.mtimeMs + 1000);
+    utimesSync(dynamicRoot, cachedMetadata.atime, changedTime);
 
     await expect(
       searchDirectoryEntries({
@@ -1023,4 +1030,60 @@ describe("home-tree scan cost", () => {
       rmSync(outside, { recursive: true, force: true });
     },
   );
+});
+
+describe("resolveAbsoluteQueryRoot", () => {
+  let fixtureRoot: string;
+  let homeDir: string;
+  let targetDir: string;
+
+  beforeEach(() => {
+    fixtureRoot = realpathSync.native(mkdtempSync(path.join(tmpdir(), "directory-outside-root-")));
+    homeDir = path.join(fixtureRoot, "home");
+    targetDir = path.join(fixtureRoot, "code");
+    mkdirSync(homeDir, { recursive: true });
+    mkdirSync(path.join(targetDir, "pkg"), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(fixtureRoot, { recursive: true, force: true });
+  });
+
+  it("re-roots a trailing-slash absolute path at the directory itself", async () => {
+    const resolved = await resolveAbsoluteQueryRoot({ query: `${targetDir}/`, root: homeDir });
+
+    expect(resolved).toEqual({ root: targetDir, query: "./" });
+  });
+
+  it("keeps an incomplete final segment when the absolute path does not exist yet", async () => {
+    const resolved = await resolveAbsoluteQueryRoot({
+      query: path.join(targetDir, "pak"),
+      root: homeDir,
+    });
+
+    expect(resolved).toEqual({ root: targetDir, query: "./pak" });
+  });
+
+  it("re-roots a nonexistent child of an existing directory at that directory", async () => {
+    const resolved = await resolveAbsoluteQueryRoot({
+      query: `${path.join(targetDir, "missing")}/`,
+      root: homeDir,
+    });
+
+    expect(resolved).toEqual({ root: targetDir, query: "./missing/" });
+  });
+
+  it("leaves queries inside the root to the caller", async () => {
+    const resolved = await resolveAbsoluteQueryRoot({
+      query: `${path.join(homeDir, "work")}/`,
+      root: homeDir,
+    });
+
+    expect(resolved).toBeNull();
+  });
+
+  it("leaves relative and tilde queries to the caller", async () => {
+    await expect(resolveAbsoluteQueryRoot({ query: "~/work", root: homeDir })).resolves.toBeNull();
+    await expect(resolveAbsoluteQueryRoot({ query: "work", root: homeDir })).resolves.toBeNull();
+  });
 });

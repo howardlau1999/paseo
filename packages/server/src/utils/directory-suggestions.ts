@@ -639,6 +639,46 @@ async function resolveDirectory(inputPath: string): Promise<string | null> {
   return info?.isDirectory() ? resolved : null;
 }
 
+/**
+ * Search requests without a workspace cwd are rooted at HOME, so an absolute path outside
+ * HOME produces no suggestions (upstream issue #483). Re-root such a query at the deepest
+ * existing ancestor of the requested path's parent and express the query relative to it, so
+ * typing `/mnt/code/` browses `/mnt/code` instead of returning nothing. The relative query is
+ * prefixed with `./` so it keeps the same rooted semantics the HOME path gets from the leading
+ * slash. Returns null when the query is not absolute, stays inside the root, or no ancestor
+ * directory exists.
+ */
+export async function resolveAbsoluteQueryRoot(input: {
+  query: string;
+  root: string;
+}): Promise<{ root: string; query: string } | null> {
+  const typed = input.query.trim().replace(/\\/g, "/");
+  if (!path.isAbsolute(typed)) return null;
+  const absolute = path.resolve(typed);
+  if (isPathInsideRoot(input.root, absolute)) return null;
+
+  // `…/code/` names the directory to browse, so root the search there when it exists.
+  if (typed.endsWith("/") && (await isDirectory(absolute))) {
+    return { root: absolute, query: "./" };
+  }
+
+  let base = path.dirname(absolute);
+  while (!(await isDirectory(base))) {
+    const parent = path.dirname(base);
+    if (parent === base) return null;
+    base = parent;
+  }
+
+  let relativeQuery = path.relative(base, absolute).split(path.sep).join("/");
+  if (typed.endsWith("/") && relativeQuery) relativeQuery += "/";
+  return { root: base, query: relativeQuery ? `./${relativeQuery}` : "./" };
+}
+
+async function isDirectory(candidate: string): Promise<boolean> {
+  const info = await stat(candidate).catch(() => null);
+  return info?.isDirectory() ?? false;
+}
+
 async function readChildren(directory: string): Promise<ChildEntry[]> {
   const directoryInfo = await stat(directory).catch(() => null);
   if (!directoryInfo?.isDirectory()) return [];
