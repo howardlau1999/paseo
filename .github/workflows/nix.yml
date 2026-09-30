@@ -83,7 +83,7 @@ jobs:
           exit 1
 
       - name: Build Nix desktop package
-        run: nix build .#desktop -o result-desktop
+        run: nix build -L .#desktop -o result-desktop
 
   build-desktop-darwin:
     runs-on: macos-14
@@ -95,7 +95,7 @@ jobs:
           nix_path: nixpkgs=channel:nixos-unstable
 
       - name: Build Nix desktop package
-        run: nix build .#desktop -o result-desktop
+        run: nix build -L .#desktop -o result-desktop
 
       - name: Verify macOS application bundle
         run: |
