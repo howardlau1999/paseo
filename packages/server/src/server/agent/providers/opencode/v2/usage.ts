@@ -1,7 +1,13 @@
-import type { ModelRef, OpenCodeEvent, SessionInfo, TokenUsageInfo } from "@opencode/client";
-import type { AgentStreamEvent } from "../../../agent-sdk-types.js";
+import type {
+  ModelRef,
+  OpenCodeEvent,
+  SessionInfo,
+  SessionMessageInfo,
+  TokenUsageInfo,
+} from "@opencode/client";
+import type { AgentStreamEvent, AgentUsage } from "../../../agent-sdk-types.js";
 import type { V2Api } from "./api.js";
-import { usageFromV2 } from "./mapping.js";
+import { contextWindowUsedTokensFromV2, usageFromV2 } from "./mapping.js";
 
 interface UsageOptions {
   client(): V2Api;
@@ -20,6 +26,20 @@ export class SessionUsage {
   private readonly limits = new Map<string, Promise<number | undefined>>();
   private reports: Promise<void> = Promise.resolve();
   constructor(private readonly options: UsageOptions) {}
+  async snapshot(history: SessionMessageInfo[]): Promise<AgentUsage> {
+    // Finish queued step reports before restoring an idle or completed session's usage.
+    await this.reports;
+    const info = this.options.info();
+    const usedTokens = contextWindowUsedTokensFromV2(history);
+    if (usedTokens === undefined) return usageFromV2(info);
+    const contextWindowMaxTokens = info.model
+      ? await this.contextLimit(info.model).catch((error: unknown) => {
+          this.options.reportError(error);
+          return undefined;
+        })
+      : undefined;
+    return usageFromV2(info, { contextWindowMaxTokens, contextWindowUsedTokens: usedTokens });
+  }
   observe(event: OpenCodeEvent) {
     if (event.type !== "session.step.ended") return;
     const { tokens } = event.data;

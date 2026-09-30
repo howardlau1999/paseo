@@ -45,7 +45,18 @@ export default {
               `/sessions/${encodeURIComponent(binding.sessionID)}/tools/${encodeURIComponent(definition.name)}`,
               input,
             );
-            return { content: result.content, metadata: { paseoTool: definition.name } };
+            return {
+              content: result.content.map((part) =>
+                part.type === "image" && typeof part.data === "string"
+                  ? {
+                      type: "file",
+                      uri: `data:${part.mimeType || "image/png"};base64,${part.data}`,
+                      mime: part.mimeType || "image/png",
+                    }
+                  : part,
+              ),
+              metadata: { paseoTool: definition.name },
+            };
           },
         });
       }

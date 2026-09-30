@@ -313,6 +313,15 @@ describe("OpenCode v2 session lifecycle", () => {
         limit: { context: 200000, output: 10000 },
       };
       harness.info.model = { providerID: "test", id: "source", variant: selected };
+      harness.history.push({
+        id: "previous-answer",
+        type: "assistant",
+        agent: "build",
+        model: { providerID: "test", id: "source" },
+        time: { created: 1 },
+        content: [{ type: "text", text: "previous reply" }],
+        tokens: { input: 100, output: 20, reasoning: 0, cache: { read: 0, write: 0 } },
+      });
       harness.api.model.list = async () => ({ location: harness.info.location, data: [target] });
       harness.api.session.switchModel = async ({ model }) => {
         harness.info.model = model;
@@ -340,6 +349,12 @@ describe("OpenCode v2 session lifecycle", () => {
           type: "thinking_option_changed",
           provider: "opencode",
           thinkingOptionId: expected ?? null,
+        });
+        expect(events.find((event) => event.type === "usage_updated")).toMatchObject({
+          usage: {
+            contextWindowMaxTokens: 200000,
+            contextWindowUsedTokens: 120,
+          },
         });
         await expect(session.setModel!("test/missing")).rejects.toThrow(
           "OpenCode model unavailable",
@@ -786,6 +801,64 @@ describe("OpenCode v2 session lifecycle", () => {
     expect(harness.releases).toBe(1);
   });
 
+  test("reports context window usage for the selected model on turn completion", async () => {
+    const harness = new V2Harness();
+    harness.info.model = { providerID: "provider", id: "model" };
+    harness.models = [
+      {
+        id: "model",
+        modelID: "model",
+        providerID: "provider",
+        name: "Model",
+        capabilities: { tools: true, input: ["text"], output: ["text"] },
+        variants: [],
+        time: { released: 1 },
+        cost: [],
+        status: "active",
+        enabled: true,
+        limit: { context: 1_024_000, output: 10_000 },
+      },
+    ];
+    harness.info.tokens = { input: 900, output: 100, reasoning: 0, cache: { read: 0, write: 0 } };
+    harness.prompt = async () => {
+      harness.history.push({
+        id: "answer",
+        type: "assistant",
+        agent: "build",
+        model: { providerID: "provider", id: "model" },
+        time: { created: 2 },
+        content: [{ type: "text", text: "done" }],
+        tokens: { input: 900, output: 100, reasoning: 20, cache: { read: 5000, write: 0 } },
+      });
+    };
+    const client = new OpenCodeV2AgentClient({
+      logger: createTestLogger(),
+      runtime: harness.runtime,
+    });
+    const session = await client.createSession({ provider: "opencode", cwd: "/tmp/project" });
+    const events: AgentStreamEvent[] = [];
+    session.subscribe((event) => events.push(event));
+    try {
+      await session.run("hello");
+      expect(events.find((event) => event.type === "turn_completed")).toMatchObject({
+        usage: {
+          inputTokens: 900,
+          outputTokens: 100,
+          contextWindowMaxTokens: 1_024_000,
+          contextWindowUsedTokens: 6020,
+        },
+      });
+      expect(events.find((event) => event.type === "usage_updated")).toMatchObject({
+        usage: {
+          contextWindowMaxTokens: 1_024_000,
+          contextWindowUsedTokens: 6020,
+        },
+      });
+    } finally {
+      await session.close();
+    }
+  });
+
   test("waits for interruption settlement before submitting replacement work", async () => {
     const harness = new V2Harness();
     harness.autoComplete = false;
@@ -831,7 +904,11 @@ describe("OpenCode v2 session lifecycle", () => {
       },
       shutdown: async () => undefined,
     };
-    const client = new OpenCodeV2AgentClient({ logger: createTestLogger(), runtime });
+    const client = new OpenCodeV2AgentClient({
+      logger: createTestLogger(),
+      runtime,
+      settings: { env: { HTTPS_PROXY: "http://provider-proxy:8080" } },
+    });
     const session = await client.createSession(
       { provider: "opencode", cwd: "/tmp/project" },
       { agentId: "agent", env: { PASEO_AGENT_ID: "agent", PASEO_AGENT_CWD: "/tmp/project" } },
@@ -841,9 +918,15 @@ describe("OpenCode v2 session lifecycle", () => {
       expect(harness.environments).toMatchObject([
         {
           sessionID: "session",
-          variables: { PASEO_AGENT_ID: "agent", PASEO_AGENT_CWD: "/tmp/project" },
+          variables: {
+            PASEO_AGENT_ID: "agent",
+            PASEO_AGENT_CWD: "/tmp/project",
+            HTTPS_PROXY: "http://provider-proxy:8080",
+          },
         },
       ]);
+      expect(harness.environments[0].variables.PATH).toBe(process.env.PATH);
+      expect(harness.environments[0].variables.HOME).toBe(process.env.HOME);
     } finally {
       await session.close();
     }
@@ -875,6 +958,63 @@ describe("OpenCode v2 session lifecycle", () => {
       await session.close();
     }
   });
+
+  test.each(["create", "resume"] as const)(
+    "%s applies session env over provider env while preserving the inherited environment",
+    async (operation) => {
+      const harness = new V2Harness();
+      const client = new OpenCodeV2AgentClient({
+        logger: createTestLogger(),
+        runtime: harness.runtime,
+        settings: {
+          env: {
+            PATH: "/provider/bin",
+            HTTPS_PROXY: "http://provider-proxy:8080",
+            NO_PROXY: "provider.internal",
+            ELECTRON_RUN_AS_NODE: "1",
+            CLAUDECODE: "1",
+          },
+        },
+      });
+      const config = { provider: "opencode", cwd: "/tmp/project" };
+      const launch = {
+        agentId: "agent",
+        env: {
+          PASEO_AGENT_ID: "agent",
+          HTTPS_PROXY: "http://session-proxy:8080",
+          NO_PROXY: "",
+        },
+      };
+      const session =
+        operation === "create"
+          ? await client.createSession(config, launch)
+          : await client.resumeSession(
+              { provider: "opencode", sessionId: "session" },
+              config,
+              launch,
+            );
+      try {
+        expect(harness.environments).toMatchObject([
+          {
+            sessionID: "session",
+            variables: {
+              PATH: "/provider/bin",
+              HTTPS_PROXY: "http://session-proxy:8080",
+              NO_PROXY: "",
+              PASEO_AGENT_ID: "agent",
+            },
+          },
+        ]);
+        const { variables } = harness.environments[0];
+        expect(variables.HOME).toBe(process.env.HOME);
+        expect(variables).not.toHaveProperty("ELECTRON_RUN_AS_NODE");
+        expect(variables).not.toHaveProperty("CLAUDECODE");
+        expect(Object.values(variables)).not.toContain(undefined);
+      } finally {
+        await session.close();
+      }
+    },
+  );
 
   test("refuses replacement work after a failed stop until Stop succeeds", async () => {
     const harness = new V2Harness();

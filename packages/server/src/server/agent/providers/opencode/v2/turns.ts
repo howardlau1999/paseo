@@ -7,6 +7,7 @@ import type {
   AgentPromptInput,
   AgentRunOptions,
   AgentStreamEvent,
+  AgentUsage,
   SteerActiveTurnOptions,
   SteerResult,
 } from "../../../agent-sdk-types.js";
@@ -14,8 +15,6 @@ import type {
 import { toDiagnosticErrorMessage } from "../../diagnostic-utils.js";
 
 import { renderPromptAttachmentAsText } from "../../../prompt-attachments.js";
-
-import { usageFromV2 } from "./mapping.js";
 
 import { commands } from "./commands.js";
 
@@ -42,6 +41,7 @@ function isExecutionEvent(event: { type: string }): event is ExecutionEvent {
 interface TurnSnapshot {
   info: SessionInfo;
   history: SessionMessageInfo[];
+  usage: AgentUsage;
 }
 interface TurnOptions {
   client(): V2Api;
@@ -270,7 +270,7 @@ export class SessionTurns {
       },
     });
   }
-  private finish(turn: Turn, { info, history }: TurnSnapshot, execution: ExecutionEvent) {
+  private finish(turn: Turn, { history, usage }: TurnSnapshot, execution: ExecutionEvent) {
     if (execution.type === "session.execution.succeeded") turn.output?.assert(history);
     this.release(turn);
     if (execution.type === "session.execution.interrupted")
@@ -292,7 +292,7 @@ export class SessionTurns {
         type: "turn_completed",
         provider: "opencode",
         turnId: turn.id,
-        usage: usageFromV2(info),
+        usage,
       });
   }
   private async readExecution(): Promise<ExecutionEvent | null> {

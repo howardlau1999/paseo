@@ -16,6 +16,7 @@ import type {
   AgentSession,
   AgentSessionConfig,
   AgentStreamEvent,
+  AgentUsage,
   SteerActiveTurnOptions,
   SteerResult,
 } from "../../../agent-sdk-types.js";
@@ -36,6 +37,14 @@ import { commands } from "./commands.js";
 import { messages } from "./history.js";
 import { SessionPermissions } from "./permissions.js";
 import { SessionUsage } from "./usage.js";
+
+function promptText(prompt: AgentPromptInput): string {
+  if (typeof prompt === "string") return prompt;
+  return prompt
+    .filter((part) => part.type === "text")
+    .map((part) => part.text)
+    .join("\n");
+}
 
 export class OpenCodeV2Session implements AgentSession {
   readonly provider = "opencode";
@@ -58,6 +67,7 @@ export class OpenCodeV2Session implements AgentSession {
   private closed = false;
   private history: SessionMessageInfo[] = [];
   private modes: AgentMode[] = [];
+  private emittedUsageKey: string | null = null;
   constructor(
     private connection: V2Connection,
     private info: SessionInfo,
@@ -91,7 +101,9 @@ export class OpenCodeV2Session implements AgentSession {
       emit: (event) => this.emit(event),
       reconcile: async () => {
         await this.reconcile();
-        return { info: this.info, history: this.history };
+        const usage = await this.usage.snapshot(this.history);
+        this.emitUsage(usage);
+        return { info: this.info, history: this.history, usage };
       },
       reportReconciliationError: (error) =>
         this.logger.warn(
@@ -318,6 +330,7 @@ export class OpenCodeV2Session implements AgentSession {
     this.info.model = nextModel;
     this.config.model = model ?? undefined;
     this.config.thinkingOptionId = variant;
+    this.emitUsage(await this.usage.snapshot(this.history));
     this.emit({
       type: "thinking_option_changed",
       provider: "opencode",
@@ -382,10 +395,16 @@ export class OpenCodeV2Session implements AgentSession {
   }
   async startTurn(prompt: AgentPromptInput, options?: AgentRunOptions) {
     await this.reconnectIfExited();
+    this.timeline.expectUserPrompt(promptText(prompt));
     return this.turns.startTurn(prompt, options);
   }
-  steerActiveTurn(prompt: AgentPromptInput, options: SteerActiveTurnOptions): Promise<SteerResult> {
-    return this.turns.steerActiveTurn(prompt, options);
+  async steerActiveTurn(
+    prompt: AgentPromptInput,
+    options: SteerActiveTurnOptions,
+  ): Promise<SteerResult> {
+    const result = await this.turns.steerActiveTurn(prompt, options);
+    if (result.status === "accepted") this.timeline.expectUserPrompt(promptText(prompt));
+    return result;
   }
   interrupt() {
     return this.turns.interrupt();
@@ -416,6 +435,27 @@ export class OpenCodeV2Session implements AgentSession {
     this.history = history;
     for (const event of this.timeline.messages(history)) this.emitTimeline(event);
     await this.permissions.reconcile(this.id);
+    // During execution, step events own the meter; history can lag behind the latest step.
+    if (!this.turns.id) this.emitUsage(await this.usage.snapshot(history));
+  }
+  private emitUsage(usage: AgentUsage) {
+    if (usage.contextWindowUsedTokens === undefined) return;
+    const key = [
+      usage.inputTokens,
+      usage.outputTokens,
+      usage.cachedInputTokens,
+      usage.totalCostUsd,
+      usage.contextWindowMaxTokens,
+      usage.contextWindowUsedTokens,
+    ].join(":");
+    if (key === this.emittedUsageKey) return;
+    this.emittedUsageKey = key;
+    this.emit({
+      type: "usage_updated",
+      provider: "opencode",
+      usage,
+      ...(this.turns.id ? { turnId: this.turns.id } : {}),
+    });
   }
   private async reconcile() {
     this.dirty = true;

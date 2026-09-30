@@ -446,6 +446,7 @@ export function wrapSessionProvider(provider: AgentProvider, inner: AgentSession
     provider,
     id: inner.id,
     capabilities: inner.capabilities,
+    initialTimeline: inner.initialTimeline,
     get features() {
       return inner.features;
     },
