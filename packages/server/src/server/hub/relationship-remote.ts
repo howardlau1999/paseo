@@ -1,6 +1,7 @@
 import { WebSocket } from "ws";
 import { z } from "zod";
 import type { WebSocketLike } from "../websocket-server.js";
+import { createWebSocketProxyAgent } from "../websocket-proxy.js";
 
 export interface HubEnrollment {
   daemonId: string;
@@ -164,6 +165,7 @@ export class DirectHubRelationshipRemote implements HubRelationshipRemote {
     let sessionProtocol: "legacy" | "session-v1" = "legacy";
     const socket = new WebSocket(input.webSocketUrl, {
       handshakeTimeout: this.requestTimeoutMs,
+      agent: createWebSocketProxyAgent(input.webSocketUrl),
       headers: {
         authorization: `Bearer ${input.credential}`,
         "x-paseo-daemon-id": input.daemonId,

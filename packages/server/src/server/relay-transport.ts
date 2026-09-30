@@ -10,6 +10,7 @@ import {
 import { buildRelayWebSocketUrl } from "@getpaseo/protocol/daemon-endpoints";
 import type { ExternalSocketMetadata } from "./websocket-server.js";
 import { createEncryptedRelaySocket } from "./websocket/encrypted-relay-socket.js";
+import { createWebSocketProxyAgent } from "./websocket-proxy.js";
 
 export interface RelayTransportOptions {
   logger: pino.Logger;
@@ -59,7 +60,10 @@ const CONTROL_READY_TIMEOUT_MS = 8_000;
 const RELAY_WEBSOCKET_OPTIONS = { handshakeTimeout: 10_000, perMessageDeflate: false } as const;
 
 function createDefaultRelayWebSocket(url: string): RelayWebSocketLike {
-  return new WebSocket(url, RELAY_WEBSOCKET_OPTIONS);
+  return new WebSocket(url, {
+    ...RELAY_WEBSOCKET_OPTIONS,
+    agent: createWebSocketProxyAgent(url),
+  });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
