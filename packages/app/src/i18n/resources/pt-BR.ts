@@ -27,6 +27,7 @@ export const ptBR: TranslationResources = {
     total: "{{total}} correspondências",
   },
   common: {
+    bottomSheetBackdrop: "Fundo do painel inferior",
     back: "Voltar",
     loading: "Carregando...",
     actions: {
@@ -384,6 +385,9 @@ export const ptBR: TranslationResources = {
         started: "Iniciada",
         completed: "Concluída",
       },
+    },
+    turnFooter: {
+      workedFor: "Trabalhou por {{duration}}",
     },
     compaction: {
       loading: "Compactando...",
@@ -992,6 +996,47 @@ export const ptBR: TranslationResources = {
         actions: {
           viewPullRequest: "Ver",
           openOn: "Abrir no {{brand}}",
+          addToChat: "Adicionar ao chat",
+          addAllToChat: "Adicionar tudo ao chat",
+          addingToChat: "Adicionando...",
+        },
+        checksOverview: {
+          headline: {
+            actionRequired: "Algumas verificações precisam da sua atenção",
+            failure: "Algumas verificações não foram bem-sucedidas",
+            pending: "Algumas verificações ainda não terminaram",
+            success: "Todas as verificações foram aprovadas",
+            none: "Nenhuma verificação",
+          },
+          count: {
+            actionRequired: "{{count}} com ação pendente",
+            warning: "{{count}} com aviso",
+            failure: "{{count}} com falha",
+            pending: "{{count}} em andamento",
+            manual: "{{count}} manual(is)",
+            success: "{{count}} aprovada(s)",
+            ignored: "{{count}} ignorada(s)",
+          },
+          detailOne: "Verificação: {{parts}}",
+          detailMany: "Verificações: {{parts}}",
+          groupOne: {
+            actionRequired: "{{count}} verificação com ação pendente",
+            warning: "{{count}} verificação com aviso",
+            failure: "{{count}} verificação com falha",
+            pending: "{{count}} verificação em andamento",
+            manual: "{{count}} verificação manual",
+            success: "{{count}} verificação aprovada",
+            ignored: "{{count}} verificação ignorada",
+          },
+          groupMany: {
+            actionRequired: "{{count}} verificações com ação pendente",
+            warning: "{{count}} verificações com aviso",
+            failure: "{{count}} verificações com falha",
+            pending: "{{count}} verificações em andamento",
+            manual: "{{count}} verificações manuais",
+            success: "{{count}} verificações aprovadas",
+            ignored: "{{count}} verificações ignoradas",
+          },
         },
         checksSummary: {
           passedLabel: "passou",
@@ -1005,17 +1050,21 @@ export const ptBR: TranslationResources = {
           checks: "Verificações",
           pipeline: "Pipeline",
           reviews: "Revisões",
+          activity: "Atividade",
         },
         empty: {
           noJobs: "Sem jobs",
           loadingPipeline: "Carregando pipeline...",
           pipelineJobsLoadFailed: "Não foi possível carregar os jobs do pipeline",
           allowedToFail: "permitido falhar",
+          noActivity: "Nenhuma atividade ainda",
         },
         approvals: "{{given}} de {{required}} aprovações",
         accessibility: {
           pullRequest: "Pull request #{{number}}",
           pullRequest_mr: "Merge request !{{number}}",
+          commentActions: "Ações do comentário",
+          threadActions: "Ações da conversa",
           checkStatus: {
             passed: "Aprovado",
             failed: "Falhou",
@@ -1113,6 +1162,14 @@ export const ptBR: TranslationResources = {
     },
   },
   sidebar: {
+    statusGroupAccessibility: "Grupo {{label}}",
+    statusBucket: {
+      needsInput: "Precisa de resposta",
+      failed: "Com falha",
+      readyToReview: "Para revisar",
+      working: "Em execução",
+      done: "Concluído",
+    },
     display: {
       trigger: "Preferências de exibição",
       heading: "Exibição",
@@ -1172,6 +1229,9 @@ export const ptBR: TranslationResources = {
       hosts: "Hosts",
       settings: "Configurações",
       closeSidebar: "Fechar barra lateral",
+    },
+    footer: {
+      usage: "Uso",
     },
     help: {
       trigger: "Ajuda e suporte",
@@ -1652,6 +1712,17 @@ export const ptBR: TranslationResources = {
       title: "Senha de {{host}}",
       label: "Senha do host",
     },
+    hostConfirmation: {
+      title: "Conectar a este host?",
+      description:
+        "Este host poderá executar código neste app e acessar seus outros hosts conectados. Conecte apenas se você o reconhecer.",
+      descriptionChanged:
+        "Este link muda como você se conecta a este host. O host poderá executar código neste app e acessar seus outros hosts conectados. Conecte apenas se você o reconhecer.",
+      hostLabel: "Host",
+      fingerprintLabel: "Impressão da chave",
+      relayLabel: "Relay",
+      connect: "Conectar",
+    },
     connectionMethods: {
       title: "Adicionar conexão",
       direct: {
@@ -1719,6 +1790,12 @@ export const ptBR: TranslationResources = {
       helper: "Conecte-se a um daemon Paseo no host remoto.",
       fields: {
         target: "Host SSH",
+        password: "Senha do daemon",
+        optional: "Opcional",
+      },
+      passwordVisibility: {
+        show: "Mostrar senha",
+        hide: "Ocultar senha",
       },
       actions: {
         cancel: "Cancelar",
@@ -1950,6 +2027,8 @@ export const ptBR: TranslationResources = {
     dismiss: "Dispensar",
   },
   contextWindow: {
+    noData: "Sem dados de contexto",
+    accessibilityNoData: "Janela de contexto: sem dados de contexto",
     title: "Janela de contexto",
     used: "{{percentage}}% usado",
     tokens: "{{used}} / {{max}} tokens",
@@ -2204,8 +2283,15 @@ export const ptBR: TranslationResources = {
         description: "Mostrar uma estrutura para navegar entre prompts",
       },
       sidebar: {
-        title: "Barra lateral",
-        description: "Escolha quais itens aparecem no topo da barra lateral e em que ordem",
+        header: {
+          title: "Cabeçalho",
+          description: "Escolha quais itens aparecem no topo da barra lateral e em que ordem",
+        },
+        footer: {
+          title: "Rodapé",
+          description:
+            "Escolha quais linhas aparecem na parte inferior da barra lateral e em que ordem. Adicionar projeto e a linha de ícones sempre aparecem",
+        },
         moveUp: "Mover para cima",
         moveDown: "Mover para baixo",
       },
