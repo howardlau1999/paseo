@@ -79,7 +79,7 @@ const variants = {
     }),
   },
   development: {
-    name: "Paseo Debug",
+    name: "远程编程",
     packageId: "sh.paseo.debug",
     googleServicesFile: resolveSecretFile({
       envKey: "GOOGLE_SERVICES_FILE_DEBUG",
