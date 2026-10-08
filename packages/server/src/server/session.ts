@@ -15,7 +15,7 @@ import equal from "fast-deep-equal";
 import { SessionDelivery, type OwnedSubscription } from "./session/owned-subscriptions/index.js";
 import { v4 as uuidv4 } from "uuid";
 import { lstat, mkdir, mkdtemp, rename, rm, stat } from "node:fs/promises";
-import { basename, resolve, sep } from "path";
+import { basename, join, resolve, sep } from "path";
 import { homedir } from "node:os";
 import { CLIENT_CAPS, type ClientCapability } from "@getpaseo/protocol/client-capabilities";
 import { formatPluginSourceReference } from "@getpaseo/protocol/plugin-source-reference";
@@ -5057,14 +5057,18 @@ export class Session {
     try {
       const workspaceCwd = cwd?.trim();
       const searchesWorkspace = Boolean(workspaceCwd);
-      const homeDir = process.env.HOME ?? homedir();
+      const homeRoot = process.env.HOME ?? homedir();
       // Without a workspace cwd the picker is HOME-scoped; allow browsing other absolute
       // paths by re-rooting the query at their deepest existing ancestor.
       const outsideHome = searchesWorkspace
         ? null
-        : await resolveAbsoluteQueryRoot({ query, root: homeDir });
+        : await resolveAbsoluteQueryRoot({ query, root: homeRoot });
+      // readdir on TCC-protected folders under ~/Library blocks forever for a process that cannot
+      // show a consent prompt, and each blocked call holds a libuv threadpool thread.
+      const excludedDiscoveryPaths =
+        !searchesWorkspace && process.platform === "darwin" ? [join(homeRoot, "Library")] : [];
       const entries = await searchDirectoryEntries({
-        root: outsideHome?.root ?? (workspaceCwd ? expandTilde(workspaceCwd) : homeDir),
+        root: outsideHome?.root ?? (workspaceCwd ? expandTilde(workspaceCwd) : homeRoot),
         query: outsideHome?.query ?? query,
         pathFormat: searchesWorkspace ? "relative" : "absolute",
         pathQueryPolicy: searchesWorkspace ? "slashes" : "rooted",
@@ -5075,6 +5079,7 @@ export class Session {
           : [],
         confidentResultScanThreshold: searchesWorkspace ? undefined : 5_000,
         respectGitIgnore: searchesWorkspace,
+        excludedDiscoveryPaths,
         includeFiles,
         includeDirectories,
         matchMode,

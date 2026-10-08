@@ -127,6 +127,7 @@ import { createPaseoWorktree as createRegisteredPaseoWorktree } from "./paseo-wo
 import { createWorkspaceProvisioningService } from "./session/workspace-provisioning/workspace-provisioning-service.js";
 import { createPaseoWorktreeWorkflow } from "./worktree-session.js";
 import { DownloadTokenStore } from "./file-download/token-store.js";
+import { formatAttachmentContentDisposition } from "./file-download/content-disposition.js";
 import type { OpenAiSpeechProviderConfig } from "./speech/providers/openai/config.js";
 import type { LocalSpeechProviderConfig } from "./speech/providers/local/config.js";
 import type { RequestedSpeechProviders } from "./speech/speech-types.js";
@@ -415,7 +416,6 @@ export interface PaseoDaemonConfig {
   plugins?: Record<string, PluginSource>;
   pluginRegistries?: PluginRegistries;
   pluginRegistryUrl?: string;
-  pluginRegistryEnabled?: boolean;
   staticDir: string;
   mcpDebug: boolean;
   isDev?: boolean;
@@ -626,7 +626,6 @@ export async function createPaseoDaemon(
       usageSession: (id) => agentManager.usageSession(id),
     },
     managedSources: new ManagedPluginSources(config.paseoHome, {
-      enabled: config.pluginRegistryEnabled ?? false,
       registries: config.pluginRegistries,
       defaultUrl: config.pluginRegistryUrl,
     }),
@@ -839,9 +838,8 @@ export async function createPaseoDaemon(
         return;
       }
 
-      const safeFileName = entry.fileName.replace(/["\r\n]/g, "_");
       res.setHeader("Content-Type", entry.mimeType);
-      res.setHeader("Content-Disposition", `attachment; filename="${safeFileName}"`);
+      res.setHeader("Content-Disposition", formatAttachmentContentDisposition(entry.fileName));
       res.setHeader("Content-Length", fileStats.size.toString());
 
       const stream = fileHandle.createReadStream();

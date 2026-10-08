@@ -1,5 +1,5 @@
 import { test, expect, beforeAll, afterAll } from "vitest";
-import { mkdirSync, mkdtempSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync, rmSync, existsSync, realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir, homedir } from "node:os";
 import path from "node:path";
@@ -831,6 +831,29 @@ test("send_agent_message auto-unarchives archived agents", async () => {
   }
 }, 180000);
 
+test("send_agent_message leaves an archived agent archived when its directory is gone", async () => {
+  const cwd = tmpCwd();
+  try {
+    const created = await ctx.client.createAgent({
+      config: {
+        ...getFullAccessConfig("codex"),
+        cwd,
+      },
+    });
+    const archived = await ctx.client.archiveAgent(created.id);
+    rmSync(cwd, { recursive: true, force: true });
+
+    await expect(ctx.client.sendMessage(created.id, "hello")).rejects.toThrow(
+      "Working directory does not exist",
+    );
+
+    const afterSend = await ctx.client.fetchAgent({ agentId: created.id });
+    expect(afterSend?.agent.archivedAt).toBe(archived.archivedAt);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+}, 30000);
+
 test("refresh_agent auto-unarchives archived agents", async () => {
   const cwd = tmpCwd();
   try {
@@ -1089,12 +1112,16 @@ test("update_agent persists unloaded title and labels across auto-unarchive", as
   }
 }, 180000);
 
-test("returns home-scoped directory suggestions", async () => {
+test("returns home-scoped directory suggestions and browses explicit paths outside home", async () => {
   const insideHomeDir = mkdtempSync(path.join(homedir(), "paseo-dir-suggestion-"));
   const rootBrowseDir = mkdtempSync(path.join(homedir(), "000-paseo-root-browse-"));
-  const outsideHomeDir = mkdtempSync(path.join(tmpdir(), "paseo-dir-suggestion-outside-"));
+  const outsideHomeDir = realpathSync.native(
+    mkdtempSync(path.join(tmpdir(), "paseo-dir-suggestion-outside-")),
+  );
+  const outsideChildDir = path.join(outsideHomeDir, "work-project");
 
   try {
+    mkdirSync(outsideChildDir);
     const insideQuery = path.basename(insideHomeDir);
     const insideResult = await ctx.client.getDirectorySuggestions({
       query: insideQuery,
@@ -1121,6 +1148,27 @@ test("returns home-scoped directory suggestions", async () => {
     });
     expect(outsideResult.error).toBeNull();
     expect(outsideResult.directories).not.toContain(outsideHomeDir);
+
+    const outsideBrowseResult = await ctx.client.getDirectorySuggestions({
+      query: `${outsideHomeDir}/`,
+      limit: 25,
+    });
+    expect(outsideBrowseResult.error).toBeNull();
+    expect(outsideBrowseResult.directories).toEqual([outsideChildDir]);
+
+    const outsideExactResult = await ctx.client.getDirectorySuggestions({
+      query: outsideHomeDir,
+      limit: 1,
+    });
+    expect(outsideExactResult.error).toBeNull();
+    expect(outsideExactResult.directories).toEqual([outsideHomeDir]);
+
+    const outsidePartialResult = await ctx.client.getDirectorySuggestions({
+      query: path.join(outsideHomeDir, "work-pro"),
+      limit: 25,
+    });
+    expect(outsidePartialResult.error).toBeNull();
+    expect(outsidePartialResult.directories).toEqual([outsideChildDir]);
   } finally {
     rmSync(insideHomeDir, { recursive: true, force: true });
     rmSync(rootBrowseDir, { recursive: true, force: true });

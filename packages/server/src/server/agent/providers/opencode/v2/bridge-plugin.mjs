@@ -46,15 +46,7 @@ export default {
               input,
             );
             return {
-              content: result.content.map((part) =>
-                part.type === "image" && typeof part.data === "string"
-                  ? {
-                      type: "file",
-                      uri: `data:${part.mimeType || "image/png"};base64,${part.data}`,
-                      mime: part.mimeType || "image/png",
-                    }
-                  : part,
-              ),
+              content: result.content.map(toOpenCodeContent),
               metadata: { paseoTool: definition.name },
             };
           },
@@ -76,3 +68,12 @@ export default {
     };
   },
 };
+
+// OpenCode tool content is text or a file; MCP images arrive as base64 data.
+function toOpenCodeContent(part) {
+  if (part.type === "image" && typeof part.data === "string") {
+    const mime = part.mimeType || "image/png";
+    return { type: "file", uri: `data:${mime};base64,${part.data}`, mime };
+  }
+  return part;
+}
