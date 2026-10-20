@@ -11,6 +11,7 @@ const native = vi.hoisted(() => ({
   initialize: vi.fn(async () => true),
   getMicrophonePermissionsAsync: vi.fn(async () => ({ granted: true })),
   requestMicrophonePermissionsAsync: vi.fn(async () => ({ granted: true })),
+  startDictation: vi.fn(() => true),
   toggleRecording: vi.fn(() => true),
   resumePlayback: vi.fn(),
   playPCMData: vi.fn(),
@@ -36,6 +37,32 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+it("starts dictation without taking conversation audio focus", async () => {
+  const engine = createAudioEngine(
+    { onCaptureData: vi.fn(), onVolumeLevel: vi.fn() },
+    { captureMode: "dictation", nativeModule: native },
+  );
+
+  await engine.startCapture();
+
+  expect(native.startDictation).toHaveBeenCalledTimes(1);
+  expect(native.toggleRecording).not.toHaveBeenCalled();
+  await engine.destroy();
+});
+
+it("defaults to conversation capture", async () => {
+  const engine = createAudioEngine(
+    { onCaptureData: vi.fn(), onVolumeLevel: vi.fn() },
+    { nativeModule: native },
+  );
+
+  await engine.startCapture();
+
+  expect(native.toggleRecording).toHaveBeenCalledExactlyOnceWith(true);
+  expect(native.startDictation).not.toHaveBeenCalled();
+  await engine.destroy();
 });
 
 it("queues the next PCM block in native playback before the first completes", async () => {

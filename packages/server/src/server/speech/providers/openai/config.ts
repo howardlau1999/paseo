@@ -40,6 +40,9 @@ const OpenAiSttOptionsSchema = z.object({
   sttModel: OptionalTrimmedStringSchema,
 });
 
+// Voice and model are free-form so a self-hosted server can use its own ids; the
+// OpenAI catalog is only the default. Both are sent as written, because the
+// server owns those ids and their case (rosters use ids like kokoro-v1:Q8_0).
 const OpenAiTtsOptionsSchema = z.object({
   ttsVoice: z.string().trim().min(1).default("alloy"),
   ttsModel: z.string().trim().min(1).default(DEFAULT_OPENAI_TTS_MODEL),

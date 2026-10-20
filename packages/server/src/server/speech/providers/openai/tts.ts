@@ -8,8 +8,8 @@ export type { SpeechStreamResult };
 export interface TTSConfig {
   apiKey: string;
   baseUrl?: string;
-  model?: string;
-  voice?: string;
+  model?: "tts-1" | "tts-1-hd" | (string & {});
+  voice?: "alloy" | "echo" | "fable" | "onyx" | "nova" | "shimmer" | (string & {});
   language?: string;
   instructions?: string;
   stream?: boolean;

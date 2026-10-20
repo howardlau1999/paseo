@@ -276,7 +276,7 @@ describe("OpenCode v2 token streaming", () => {
       (event) => event.type === "timeline" && event.item.type === "assistant_message",
     );
     expect(image).toMatchObject({
-      item: { text: expect.stringMatching(/^!\[Screenshot\]\(file:\/\//) },
+      item: { text: expect.stringMatching(/^\n\n!\[Screenshot\]\(file:\/\//) },
     });
     expect(JSON.stringify(events)).not.toContain(ONE_BY_ONE_PNG_BASE64);
     expect(JSON.stringify(events)).toContain("[image]");
@@ -299,7 +299,7 @@ describe("OpenCode v2 token streaming", () => {
     ).toEqual([]);
     if (!image || image.type !== "timeline" || image.item.type !== "assistant_message")
       throw new Error("Image message was not emitted");
-    const source = image.item.text.match(/^!\[[^\]]*\]\((.*)\)$/)?.[1];
+    const source = image.item.text.trim().match(/^!\[[^\]]*\]\((.*)\)$/)?.[1];
     if (!source) throw new Error("Image source was not emitted");
     const imagePath = fileURLToPath(source);
     try {
@@ -329,7 +329,9 @@ describe("OpenCode v2 token streaming", () => {
     const events = new V2Timeline(false).messages([result]);
     expect(events).toMatchObject([
       { item: { type: "tool_call", detail: { output: expect.stringContaining("notes.txt") } } },
-      { item: { type: "assistant_message", text: "![Image](file:///tmp/screenshot.png)" } },
+      {
+        item: { type: "assistant_message", text: "\n\n![Image](file:///tmp/screenshot.png)\n\n" },
+      },
     ]);
     expect(JSON.stringify(events)).not.toContain(
       "file:///tmp/screenshot.png\nfile:///tmp/notes.txt",
