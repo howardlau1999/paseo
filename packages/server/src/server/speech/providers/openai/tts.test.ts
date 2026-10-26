@@ -80,4 +80,47 @@ describe("OpenAITTS", () => {
     expect(Buffer.concat(chunks)).toEqual(pcm);
     expect(typeof result.stream.destroy).toBe("function");
   });
+
+  test("delivers streaming PCM before the response finishes", async () => {
+    const firstChunk = Uint8Array.from([1, 0, 2, 0]);
+    const secondChunk = Uint8Array.from([3, 0, 4, 0]);
+    const body = new TransformStream<Uint8Array, Uint8Array>();
+    const writer = body.writable.getWriter();
+    speechCreateMock.mockResolvedValue(new Response(body.readable));
+    const provider = new OpenAITTS(
+      { apiKey: "local-qwen", stream: true, responseFormat: "pcm" },
+      pino({ level: "silent" }),
+    );
+
+    const result = await provider.synthesizeSpeech("你好");
+    const chunks = result.stream[Symbol.asyncIterator]();
+    try {
+      const first = chunks.next();
+      await writer.write(firstChunk);
+      expect(await first).toEqual({ value: Buffer.from(firstChunk), done: false });
+
+      const second = chunks.next();
+      await writer.write(secondChunk);
+      expect(await second).toEqual({ value: Buffer.from(secondChunk), done: false });
+      await writer.close();
+      expect(await chunks.next()).toEqual({ value: undefined, done: true });
+    } finally {
+      result.stream.destroy();
+    }
+  });
+
+  test("buffers non-streaming speech before returning prefetched audio", async () => {
+    const pcm = Uint8Array.from([1, 0, 2, 0]);
+    const response = new Response(pcm);
+    speechCreateMock.mockResolvedValue(response);
+    const provider = new OpenAITTS({ apiKey: "sk-test" }, pino({ level: "silent" }));
+
+    const result = await provider.synthesizeSpeech("hello");
+    expect(response.bodyUsed).toBe(true);
+    const chunks: Buffer[] = [];
+    for await (const chunk of result.stream) {
+      chunks.push(Buffer.from(chunk));
+    }
+    expect(Buffer.concat(chunks)).toEqual(Buffer.from(pcm));
+  });
 });

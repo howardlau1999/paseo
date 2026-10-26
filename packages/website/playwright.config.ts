@@ -19,7 +19,8 @@ export default defineConfig({
         },
         {
           command: "npm run build && npm run preview -- --host 127.0.0.1 --port 8187 --strictPort",
-          url: baseURL,
+          // Probe the server without running the homepage loader's live GitHub requests.
+          url: new URL("/logo.svg", baseURL).href,
           timeout: 180_000,
           stdout: "pipe",
           env: {

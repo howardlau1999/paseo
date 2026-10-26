@@ -284,6 +284,12 @@ export const PersistedConfigSchema = z
         relay: z
           .object({
             enabled: z.boolean().optional(),
+            requireProtectedSecurity: z
+              .boolean()
+              .optional()
+              .describe(
+                "Admit only relay clients that negotiate protected endpoint security (replay protection). Defaults to false; older clients still connect while it is off.",
+              ),
             endpoint: z.string().optional(),
             publicEndpoint: z.string().optional(),
             useTls: z.boolean().optional(),
@@ -339,6 +345,7 @@ export const PersistedConfigSchema = z
     agents: z
       .object({
         providers: z.preprocess(normalizeAgentProviders, ProviderOverridesSchema).optional(),
+        idleRuntimeCleanup: z.boolean().optional(),
         catalogRefreshTimeoutMs: z.number().int().positive().max(2_147_483_647).optional(),
         metadataGeneration: AgentMetadataGenerationSchema.optional(),
         skills: z.object({ selection: AgentSkillSelectionSchema.optional() }).strict().optional(),

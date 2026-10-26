@@ -616,6 +616,9 @@ export const ko: TranslationResources = {
       hostDisconnected: "호스트가 연결되어 있지 않습니다",
       updateHost: "기본 터미널 렌더러를 사용하도록 호스트를 업데이트합니다.",
       unableToSubscribe: "터미널을 구독할 수 없습니다",
+      fileUploaded: "파일을 업로드했습니다",
+      pasteFileFailed: "파일을 붙여넣지 못했습니다: {{reason}}",
+      uploadingFile: "파일 업로드 중…",
     },
     sheet: {
       openAsTab: "탭으로 열기",
@@ -963,6 +966,7 @@ export const ko: TranslationResources = {
         checkingRepository: "저장소 확인 중...",
         notRepository: "Git 저장소가 아닙니다",
         diffMode: "Diff 모드",
+        all: "모든 변경 사항",
         uncommitted: "커밋되지 않음",
         committed: "커밋됨",
         branchUnknown: "알 수 없음",
@@ -1169,6 +1173,13 @@ export const ko: TranslationResources = {
       showBackground: "백그라운드 표시",
       trigger: "표시 설정",
       heading: "표시",
+      sort: {
+        label: "정렬",
+        created: "생성일",
+        manual: "수동",
+        lastPrompt: "마지막 프롬프트",
+        updateHost: "작업 공간을 정렬하려면 호스트를 업데이트하세요",
+      },
       grouping: {
         label: "그룹화",
         project: "프로젝트",
@@ -1908,6 +1919,13 @@ export const ko: TranslationResources = {
     backdrop: "메뉴 배경",
   },
   subagents: {
+    parent: {
+      backToParent: "상위 에이전트로 돌아가기",
+      backTo: "{{label}}(으)로 돌아가기",
+      parent: "상위",
+      parentAgent: "상위 에이전트",
+      openParent: "상위 에이전트 열기",
+    },
     title: "하위 에이전트",
     pillLabelOne: "하위 에이전트 1개",
     pillLabelMany: "하위 에이전트 {{count}}개",
@@ -1929,14 +1947,35 @@ export const ko: TranslationResources = {
       creatingAgent: "에이전트 생성 중",
     },
     file: {
+      filePanels: {
+        pickerTitleExtension: ".{{extension}} 파일 열기 방식",
+        pickerTitleFilename: "{{filename}} 열기 방식",
+        dontAskAgain: "다시 묻지 않기",
+        use: "사용",
+        openWith: "다음으로 열기…",
+        alwaysUseExtension: ".{{extension}}에 항상 사용",
+        alwaysUseFilename: "{{filename}}에 항상 사용",
+        option: "{{title}} — {{owner}}",
+        builtin: {
+          owner: "Paseo",
+          markdown: "Markdown",
+          html: "HTML",
+          image: "이미지",
+          source: "소스",
+        },
+      },
       directoryMissing: "워크스페이스 디렉터리를 찾을 수 없습니다.",
       loading: "파일 불러오는 중...",
       noPreview: "사용 가능한 미리보기가 없습니다",
       binaryPreviewUnavailable: "바이너리 미리보기를 사용할 수 없습니다",
       tooLargeToDisplay: "이 파일은 너무 커서 표시할 수 없습니다",
+      documentUnsupported: "{{type}} 파일은 이 기기에서 표시할 수 없습니다",
       failedToLoad: "파일을 불러오지 못했습니다",
+      notFound: "파일을 찾을 수 없습니다",
       failedToLoadPreview: "파일 미리보기를 불러오지 못했습니다",
       editor: {
+        preview: "미리보기",
+        source: "소스",
         fileSize: "파일 크기 {{size}}",
         lines: "{{count}} 라인",
         editorStatus: "편집기 상태 {{status}}",
@@ -1946,10 +1985,7 @@ export const ko: TranslationResources = {
         changedOnDisk: "디스크에서 변경됨",
         vimMode: "Vim 모드 {{mode}}",
         cursor: "{{line}} 라인, {{column}} 열",
-        preview: "미리보기",
-        source: "소스",
         deletedTitle: "디스크에서 파일이 삭제되었습니다.",
-        checkFailedTitle: "디스크의 파일을 확인할 수 없습니다.",
         preservedDescription: "열린 복사본은 보존됩니다.",
         conflictDescription: "로컬 버퍼가 보존되었습니다. 유지할 버전을 선택하세요.",
         overwrite: "덮어쓰기",
@@ -1989,6 +2025,12 @@ export const ko: TranslationResources = {
     subAgentActivity: "서브에이전트 활동",
     input: "입력",
     output: "출력",
+  },
+  turnSummary: {
+    messages: {
+      one: "{{count}} 메시지를 작성했습니다.",
+      other: "{{count}} 메시지를 작성했습니다.",
+    },
   },
   toolCallGroup: {
     editedFiles: {
@@ -2149,6 +2191,7 @@ export const ko: TranslationResources = {
       terminal: "터미널",
       browser: "브라우저",
       editor: "편집기",
+      files: "파일",
       shortcuts: "단축키",
       integrations: "통합",
       notifications: "알림",
@@ -2161,6 +2204,14 @@ export const ko: TranslationResources = {
       title: "편집기",
       vimKeybindings: "Vim 키 바인딩",
       vimHint: "웹 및 데스크톱의 소스 파일에 적용됩니다.",
+    },
+    files: {
+      title: "파일",
+      askEveryTime: "매번 묻기",
+      askAgain: "다시 묻기",
+      askAgainFor: "{{label}} 다시 묻기",
+      unavailable: "연결된 호스트에 없음",
+      empty: "플러그인이 파일 패널을 추가하면 여기에 표시됩니다",
     },
     notifications: {
       title: "알림",
@@ -2200,7 +2251,7 @@ export const ko: TranslationResources = {
       automaticHint: "Paseo가 사용 가능한 빠른 모델을 선택합니다",
       preferredHint: "Paseo에서 사용할 모델을 선택하세요",
       model: "모델",
-      fallbackHint: "사용할 수 없으면 Paseo가 다른 사용 가능한 모델을 사용합니다",
+      modelHint: "이 모델만 사용합니다. 실패해도 Paseo는 다른 모델을 시도하지 않습니다",
       docs: "문서",
       saveError: "메타데이터 생성을 업데이트할 수 없습니다",
     },
@@ -2250,12 +2301,13 @@ export const ko: TranslationResources = {
         label: "추론 항상 펼치기",
         description: "에이전트의 사고 및 추론 블록을 기본적으로 모두 펼쳐 표시합니다.",
       },
-      toolCallDetail: {
-        label: "도구 호출 표시",
-        description: "타임라인에 도구 호출이 표시되는 방식",
+      chatDisplay: {
+        label: "채팅 표시",
+        description: "채팅에 표시할 에이전트 작업의 양",
         options: {
-          overview: "요약",
-          detailed: "전체 세부정보",
+          full: "전체",
+          collapseToolCalls: "도구 호출 접기",
+          collapseTurns: "턴 접기",
         },
       },
       language: {
@@ -2277,11 +2329,6 @@ export const ko: TranslationResources = {
     },
     diagnostics: {
       title: "진단",
-      legacyTerminalRenderer: {
-        label: "레거시 터미널 렌더러 사용",
-        description: "터미널을 다시 열 때 이전 WebView 터미널을 사용합니다.",
-        accessibilityLabel: "레거시 터미널 렌더러 사용",
-      },
       testAudio: "오디오 테스트",
       playTest: "테스트 재생",
       playing: "재생 중...",
@@ -2627,6 +2674,11 @@ export const ko: TranslationResources = {
       },
       agents: {
         unavailable: "에이전트를 관리하려면 이 호스트에 연결하세요",
+        idleRuntimeCleanup: {
+          title: "유휴 에이전트 해제",
+          hint: "1시간 동안 활동이 없으면 메모리를 확보합니다.",
+          info: "대화를 유지하면서 에이전트 프로세스를 중지합니다. 메시지를 보내면 다시 이어집니다.\n\n진행 중인 작업, 대기 중인 알림, 프로바이더 안전 검사가 있으면 정리하지 않습니다.",
+        },
       },
       workspaces: {
         unavailable: "워크스페이스를 관리하려면 이 호스트에 연결하세요",

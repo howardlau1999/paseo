@@ -74,9 +74,11 @@ export class OpenAITTS implements TextToSpeechProvider {
       if (!response.body) {
         throw new Error("TTS response has no audio body");
       }
-      const audioStream = Readable.fromWeb(
-        response.body as unknown as import("node:stream/web").ReadableStream,
-      );
+      // Prefetched speech can wait through playback of an earlier sentence. Consume
+      // non-streaming responses here so fetch cannot cancel their unread bodies.
+      const audioStream = this.prefersWholeUtterance
+        ? Readable.fromWeb(response.body as unknown as import("node:stream/web").ReadableStream)
+        : Readable.from([Buffer.from(await response.arrayBuffer())]);
 
       const duration = Date.now() - startTime;
       this.logger.debug({ duration }, "Speech synthesis stream ready");
