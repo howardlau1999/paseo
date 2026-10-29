@@ -2,17 +2,18 @@ import type pino from "pino";
 import { Readable } from "node:stream";
 import { existsSync } from "node:fs";
 import { availableParallelism } from "node:os";
+import path from "node:path";
 
 import type { SpeechStreamResult, TextToSpeechProvider } from "../../../speech-provider.js";
 import { chunkBuffer, float32ToPcm16le } from "../../../audio.js";
 import { loadSherpaOnnxNode } from "./sherpa-onnx-node-loader.js";
-
-export type SherpaTtsPreset = "kokoro-en-v0_19" | "kokoro-multi-lang-v1_0";
+import { engineFiles, type LocalTtsModelId, type TtsEngine } from "./model-catalog.js";
 
 export interface SherpaTtsConfig {
-  preset: SherpaTtsPreset;
+  modelId: LocalTtsModelId;
   modelDir: string;
   provider?: "cpu" | "cuda";
+  engine: TtsEngine;
   speakerId?: number;
   speed?: number;
   lengthScale?: number;
@@ -23,6 +24,53 @@ function assertFileExists(filePath: string, label: string): void {
   if (!existsSync(filePath)) {
     throw new Error(`Missing ${label}: ${filePath}`);
   }
+}
+
+// Each engine family takes its own block under sherpa's TTS model config.
+function buildTtsModelConfig(
+  modelDir: string,
+  engine: TtsEngine,
+  lengthScale: number,
+): Record<string, unknown> {
+  const file = (name: string) => path.join(modelDir, name);
+  switch (engine.family) {
+    case "kokoro":
+      return {
+        kokoro: {
+          model: file(engine.model),
+          voices: file(engine.voices),
+          tokens: file(engine.tokens),
+          dataDir: file(engine.dataDir),
+          lexicon: (engine.lexicons ?? []).map(file).join(","),
+          dictDir: engine.dictDir ? file(engine.dictDir) : "",
+          lengthScale,
+        },
+      };
+    case "kitten":
+      return {
+        kitten: {
+          model: file(engine.model),
+          voices: file(engine.voices),
+          tokens: file(engine.tokens),
+          dataDir: file(engine.dataDir),
+          lengthScale,
+        },
+      };
+    case "vits":
+      return {
+        vits: {
+          model: file(engine.model),
+          tokens: file(engine.tokens),
+          dataDir: file(engine.dataDir),
+          lengthScale,
+        },
+      };
+  }
+}
+
+function ruleFsts(modelDir: string, engine: TtsEngine): string {
+  if (engine.family !== "kokoro" || !engine.ruleFsts) return "";
+  return engine.ruleFsts.map((name) => path.join(modelDir, name)).join(",");
 }
 
 interface SherpaOfflineTtsNative {
@@ -53,7 +101,7 @@ export class SherpaOnnxTTS implements TextToSpeechProvider {
     > = loadSherpaOnnxNode,
   ) {
     this.logger = logger.child({ module: "speech", provider: "local", component: "tts" });
-    const multilingual = config.preset === "kokoro-multi-lang-v1_0";
+    const multilingual = config.modelId === "kokoro-multi-lang-v1_0";
     this.speakerId = config.speakerId ?? (multilingual ? 48 : 0);
     this.speed = config.speed ?? 1.0;
 
@@ -62,27 +110,8 @@ export class SherpaOnnxTTS implements TextToSpeechProvider {
       throw new Error("sherpa-onnx-node OfflineTts is unavailable");
     }
 
-    const modelPath = `${config.modelDir}/model.onnx`;
-    const voicesPath = `${config.modelDir}/voices.bin`;
-    const tokensPath = `${config.modelDir}/tokens.txt`;
-    const dataDir = `${config.modelDir}/espeak-ng-data`;
-
-    assertFileExists(modelPath, "TTS model");
-    assertFileExists(voicesPath, "TTS voices");
-    assertFileExists(tokensPath, "TTS tokens");
-    assertFileExists(dataDir, "TTS espeak-ng dataDir");
-
-    const usLexicon = `${config.modelDir}/lexicon-us-en.txt`;
-    const zhLexicon = `${config.modelDir}/lexicon-zh.txt`;
-    const ruleFsts = ["phone-zh.fst", "date-zh.fst", "number-zh.fst"].map(
-      (file) => `${config.modelDir}/${file}`,
-    );
-    if (multilingual) {
-      assertFileExists(usLexicon, "TTS English lexicon");
-      assertFileExists(zhLexicon, "TTS Chinese lexicon");
-      for (const ruleFst of ruleFsts) {
-        assertFileExists(ruleFst, "TTS Chinese rule FST");
-      }
+    for (const name of engineFiles(config.engine)) {
+      assertFileExists(path.join(config.modelDir, name), `${config.engine.family} TTS file`);
     }
 
     const provider = config.provider ?? "cpu";
@@ -90,20 +119,13 @@ export class SherpaOnnxTTS implements TextToSpeechProvider {
       // The native parser reads these under model, despite the upstream JS typedef.
       numThreads: config.numThreads ?? (multilingual ? Math.min(4, availableParallelism()) : 2),
       provider,
-      kokoro: {
-        model: modelPath,
-        voices: voicesPath,
-        tokens: tokensPath,
-        dataDir,
-        lengthScale: config.lengthScale ?? 1.0,
-        ...(multilingual ? { lexicon: `${usLexicon},${zhLexicon}` } : {}),
-      },
+      ...buildTtsModelConfig(config.modelDir, config.engine, config.lengthScale ?? 1.0),
     };
 
     const offlineTtsConfig = {
       model: modelConfig,
       maxNumSentences: 1,
-      ...(multilingual ? { ruleFsts: ruleFsts.join(",") } : {}),
+      ruleFsts: ruleFsts(config.modelDir, config.engine),
     };
 
     const OfflineTts = (
@@ -120,7 +142,7 @@ export class SherpaOnnxTTS implements TextToSpeechProvider {
       this.tts = new OfflineTts(offlineTtsConfig);
     }
     this.logger.info(
-      { preset: config.preset, modelDir: config.modelDir, provider: modelConfig.provider },
+      { modelId: config.modelId, modelDir: config.modelDir, provider: modelConfig.provider },
       "Sherpa offline TTS initialized",
     );
   }

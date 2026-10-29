@@ -67,6 +67,7 @@ export const ar: TranslationResources = {
       daemonClientUnavailable: "عميل Daemon غير متوفر",
       daemonClientDisconnected: "تم قطع اتصال عميل Daemon",
       noFileFound: "لم يتم العثور على ملف لـ{{token}}",
+      folderOutsideWorkspace: "{{path}} خارج مساحة العمل هذه",
       unexpectedDictationError: "حدث خطأ غير متوقع أثناء معالجة الإملاء.",
     },
     connectionStatus: {
@@ -133,6 +134,8 @@ export const ar: TranslationResources = {
       sendAndInterrupt: "إرسال ومقاطعة",
       sendAndSteer: "إرسال وتوجيه",
       sendMessage: "أرسل رسالة",
+      longPressToQueue: "اضغط مطولًا لإضافتها إلى الطابور",
+      longPressToSendNow: "اضغط مطولًا للإرسال الآن",
       queue: "طابور",
       send: "يرسل",
     },
@@ -1912,7 +1915,6 @@ export const ar: TranslationResources = {
     parent: {
       backToParent: "العودة إلى الوكيل الأصلي",
       backTo: "العودة إلى {{label}}",
-      parent: "الأصل",
       parentAgent: "الوكيل الأصلي",
       openParent: "فتح الوكيل الأصلي",
     },
@@ -2017,12 +2019,13 @@ export const ar: TranslationResources = {
     output: "الإخراج",
   },
   turnSummary: {
-    messages: {
-      one: "كتب {{count}} رسالة",
-      other: "كتب {{count}} رسائل",
-    },
+    details: "عرض تفاصيل الجولة",
+    sentBy: "أرسلها {{name}}",
+    showMore: "عرض المزيد",
+    showLess: "عرض أقل",
   },
   toolCallGroup: {
+    thought: "فكّر",
     editedFiles: {
       one: "حرّر {{count}} ملفًا",
       other: "حرّر {{count}} ملفات",
@@ -2155,6 +2158,7 @@ export const ar: TranslationResources = {
       minutes_few: "{{value}} دقائق",
       minutes_many: "{{value}} دقيقة",
       minutes_other: "{{value}} دقيقة",
+      pair: "{{first}} و{{second}}",
     },
     timing: {
       lastUpdated: "آخر تحديث {{relativeTime}}",
@@ -2162,6 +2166,8 @@ export const ar: TranslationResources = {
       resetTimePassed: "مضى وقت إعادة التعيين",
       resettingNow: "تتم إعادة التعيين الآن",
       resetsIn: "تتم إعادة التعيين خلال {{duration}}",
+      resetsAtWeekday: "{{weekday}} {{time}}",
+      resetsAtDate: "{{date}}، {{time}}",
       runsOutNow: "ينفد الآن",
       runsOutIn: "ينفد خلال {{duration}}",
       justNow: "الآن",
@@ -2259,6 +2265,7 @@ export const ar: TranslationResources = {
       connections: "اتصالات",
       agents: "Agents",
       metadata: "البيانات الوصفية",
+      voice: "الصوت",
       workspaces: "Workspaces",
       providers: "مقدمي الخدمات",
       usage: "الاستخدام",
@@ -2280,6 +2287,69 @@ export const ar: TranslationResources = {
       modelHint: "يُستخدم هذا النموذج فقط. إذا فشل، لا يجرّب Paseo نموذجًا آخر",
       docs: "الوثائق",
       saveError: "تعذر تحديث إنشاء البيانات الوصفية",
+    },
+    voice: {
+      offline: "اتصل بهذا المضيف لضبط الصوت.",
+      updateHost: "حدّث المضيف لضبط الصوت.",
+      saveError: "تعذّر تحديث إعدادات الصوت",
+      provider: "المزوّد",
+      providers: {
+        local: "محلي",
+        openai: "OpenAI",
+      },
+      voice: "الصوت",
+      save: "حفظ",
+      retry: "إعادة المحاولة",
+      cancel: "إلغاء",
+      model: "النموذج",
+      language: "اللغة",
+      languagePlaceholder: "اكتشاف تلقائي",
+      setBy: "محدد بواسطة {{name}}",
+      unknownProvider: "حدّث التطبيق لإعداد {{provider}}",
+      sites: {
+        dictationStt: "تحويل الكلام إلى نص",
+        voiceModeStt: "الاستماع",
+        voiceModeTts: "التحدث",
+      },
+      dictation: {
+        title: "الإملاء",
+        enabled: "الإملاء",
+        enabledHint: "تحدّث في مربع الرسالة بدلًا من الكتابة",
+      },
+      voiceMode: {
+        title: "وضع الصوت",
+        info: "يحوّل وضع الصوت كلامك إلى نص ويقرأ ردود الوكيل بصوت عالٍ.",
+        enabled: "وضع الصوت",
+        enabledHint: "تحدّث مع وكلائك دون استخدام يديك",
+      },
+      openai: {
+        apiKey: "مفتاح API",
+        apiKeyHint: "يُحفظ على المضيف ولا يُعرض مرة أخرى.",
+        keyPlaceholder: "sk-...",
+        savedKeyPlaceholder: "محفوظ",
+        missingKey: "مفتاح API مفقود",
+        baseUrl: "عنوان URL الأساسي",
+        baseUrlHint: "للخوادم المتوافقة مع OpenAI. اتركه فارغًا لاستخدام OpenAI.",
+      },
+      models: {
+        loading: "جارٍ تحميل النماذج...",
+        loadError: "تعذّر تحميل النماذج المحلية",
+        none: "لا توجد نماذج متاحة",
+        downloaded: "منزّل",
+        inUse: "قيد الاستخدام",
+        recommended: "موصى به",
+        download: "تنزيل",
+        downloadAction: "تنزيل {{label}}",
+        downloading: "جارٍ التنزيل...",
+        downloadingPercent: "جارٍ التنزيل {{percent}}%",
+        extracting: "جارٍ الاستخراج...",
+        delete: "حذف",
+        deleteAction: "حذف {{label}}",
+        deleteTitle: "حذف {{label}}؟",
+        deleteMessage: "سيؤدي هذا إلى تحرير {{size}}. يمكنك تنزيله مرة أخرى لاحقًا.",
+        languages: "لغات {{label}}",
+        moreLanguages: "{{languages}} و{{count}} أخرى",
+      },
     },
     general: {
       title: "عام",
@@ -2304,10 +2374,23 @@ export const ar: TranslationResources = {
             "عند تشغيل الوكيل، يوجّه Enter الجولة النشطة. يضيف Command/Ctrl+Enter إلى قائمة الانتظار.",
           queue: "عند تشغيل الوكيل، يضيف Enter إلى قائمة الانتظار. Command/Ctrl+Enter يرسل.",
         },
+        commandEnterDescriptions: {
+          interrupt: "عند تشغيل الوكيل، يوقف {{modifier}}+Enter التشغيل. يُدرج Enter سطرًا جديدًا.",
+          steer: "عند تشغيل الوكيل، يوجّه {{modifier}}+Enter الجولة النشطة. يُدرج Enter سطرًا جديدًا.",
+          queue:
+            "عند تشغيل الوكيل، يضيف {{modifier}}+Enter إلى قائمة الانتظار. يُدرج Enter سطرًا جديدًا.",
+        },
         options: {
           interrupt: "مقاطعة",
           steer: "توجيه",
           queue: "طابور",
+        },
+      },
+      sendShortcut: {
+        label: "اختصار الإرسال",
+        options: {
+          enter: "Enter",
+          "mod-enter": "{{modifier}}+Enter",
         },
       },
       serviceUrls: {
@@ -2699,6 +2782,14 @@ export const ar: TranslationResources = {
       },
       agents: {
         unavailable: "Connect to this host to manage agents",
+        resumeOnStartup: {
+          title: "استئناف الوكلاء بعد إعادة التشغيل",
+          info: "إعادة فتح الوكلاء الذين كانوا يعملون عند توقف المضيف وإرسال طلب الاستئناف. ينطبق ذلك بعد إعادة التشغيل العادية والتعطّل.",
+          hint: "متابعة العمل المنقطع تلقائيًا.",
+          prompt: "طلب الاستئناف",
+          edit: "تحرير",
+          editAccessibilityLabel: "تعديل الطلب",
+        },
         idleRuntimeCleanup: {
           title: "تحرير الوكلاء الخاملين",
           hint: "تحرير الذاكرة بعد ساعة من الخمول.",
@@ -2794,6 +2885,10 @@ export const ar: TranslationResources = {
           requestFailedTitle: "خطأ",
           requestFailedMessage:
             "فشل في إرسال طلب إعادة التشغيل.  يقوم Paseo بإعادة الاتصال تلقائيًا - حاول مرة أخرى بمجرد ظهور المضيف على أنه متصل بالإنترنت.",
+          closeTerminals: "إعادة التشغيل وإغلاق الطرفيات",
+          closeTerminalsHint: "يعيد التشغيل ويغلق أيضًا كل الطرفيات المفتوحة على هذا المضيف.",
+          closeTerminalsConfirmMessage:
+            "سيُعاد تشغيل الخدمة وتُغلق كل طرفياتها، مما ينهي البرامج التي تعمل فيها. سيعيد التطبيق الاتصال تلقائيًا.",
           dialogFailedMessage: "غير قادر على فتح مربع حوار تأكيد إعادة التشغيل.",
         },
         update: {
